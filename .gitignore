@@ -13,8 +13,7 @@ venv/
 .mypy_cache/
 
 # 模型权重 / checkpoints / 下载缓存
-models/
-checkpoints/
+# 注意：不要用裸 `models/`，否则会误伤 vendor/index-tts2-cli/.../maskgct/models 源码
 vendor/*/models/
 vendor/*/checkpoints/
 vendor/pyvideotrans/models/
