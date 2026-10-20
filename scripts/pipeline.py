@@ -1,0 +1,672 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""video-translate: portable orchestration for subtitled/dubbed video translation.
+
+Stages: ASR -> translation -> voice-clone dubbing -> align/mux -> loudnorm -> QC.
+
+Examples:
+  python scripts/pipeline.py setup
+  python scripts/pipeline.py doctor
+  python scripts/pipeline.py serve
+  python scripts/pipeline.py run --src "D:/videos" --out "D:/translated" \
+      --source en --target zh-cn --backend index
+"""
+from __future__ import annotations
+
+import argparse
+import concurrent.futures as cf
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+SKILL = Path(__file__).resolve().parent.parent
+SCRIPTS = SKILL / "scripts"
+VENDOR = SKILL / "vendor"
+PVT_DEFAULT = VENDOR / "pyvideotrans"
+ITT_DEFAULT = VENDOR / "index-tts2-cli"
+TOOLS = SKILL / "tools"
+CONFIG = SKILL / "config.json"
+RUNTIME = SKILL / ".runtime"
+LOGS = RUNTIME / "logs"
+STATE = RUNTIME / "state"
+WRAPPER = SCRIPTS / "trans_cli.py"
+SHIM = SCRIPTS / "gradio_shim.py"
+QC = SCRIPTS / "qc.py"
+AB = SCRIPTS / "ab.py"
+POLISH = SCRIPTS / "polish_srt.py"
+REPORT = SCRIPTS / "make_report.py"
+IS_WINDOWS = platform.system().lower() == "windows"
+
+DEFAULTS = {
+    "pyvideotrans_home": "vendor/pyvideotrans",
+    "index_tts2_home": "vendor/index-tts2-cli",
+    "src_dir": "",
+    "out_dir": "",
+    "work_dir": "_work",
+    "backend": "index",
+    "source_lang": "en",
+    "target_lang": "zh-cn",
+    "subtitle_mode": "hard",
+    "translate_channel": "deepseek",
+    "deepseek_model": "deepseek-flash",
+    "asr_model": "large-v3-turbo",
+    "index_api": "http://127.0.0.1:8791",
+    "index_url": "http://127.0.0.1:7861",
+    "index_api_port": 8791,
+    "shim_port": 7861,
+    "index_fast": False,
+    "index_restart_every": 25,
+    "mt_workers": 4,
+    "loudness": -18.0,
+    "final_suffix": "",
+    "glossary": "assets/glossary.txt",
+}
+
+
+def resolve(value: str | Path, base: Path = SKILL) -> Path:
+    p = Path(value).expanduser()
+    return p if p.is_absolute() else (base / p).resolve()
+
+
+def load_config() -> dict:
+    cfg = dict(DEFAULTS)
+    if CONFIG.exists():
+        try:
+            cfg.update(json.loads(CONFIG.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+    for key in ("pyvideotrans_home", "index_tts2_home", "glossary"):
+        if cfg.get(key):
+            cfg[key] = str(resolve(cfg[key]))
+    return cfg
+
+
+def save_config(cfg: dict) -> None:
+    CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def pvt_python(cfg: dict) -> Path:
+    p = Path(cfg["pyvideotrans_home"])
+    return p / (".venv/Scripts/python.exe" if IS_WINDOWS else ".venv/bin/python")
+
+
+def itt_python(cfg: dict) -> Path:
+    venv = Path(cfg["index_tts2_home"]) / "venv"
+    if IS_WINDOWS:
+        # uv on Windows creates venv/Scripts/python.exe; older packages used
+        # venv/python.exe. Accept either layout.
+        for rel in ("python.exe", "Scripts/python.exe"):
+            if (venv / rel).exists():
+                return venv / rel
+        return venv / "Scripts/python.exe"
+    return venv / "bin/python"
+
+
+def itt_cli(cfg: dict) -> Path:
+    p = Path(cfg["index_tts2_home"]) / "scripts"
+    return p / ("indextts2.cmd" if IS_WINDOWS else "indextts2.sh")
+
+
+def env(cfg: dict) -> dict:
+    e = os.environ.copy()
+    paths = []
+    ff = TOOLS / "ffmpeg" / "bin"
+    if ff.exists():
+        paths.append(str(ff))
+    rb = TOOLS / "rubberband" / "rubberband-4.0.0-gpl-executable-windows"
+    if rb.exists():
+        paths.append(str(rb))
+    if (TOOLS / "uv").exists():
+        paths.append(str(TOOLS / "uv"))
+    e["PATH"] = os.pathsep.join(paths + [e.get("PATH", "")])
+    e["PYVIDEOTRANS_HOME"] = cfg["pyvideotrans_home"]
+    e["INDEXTTS2_HOME"] = cfg["index_tts2_home"]
+    e.setdefault("PYTHONUTF8", "1")
+    e.setdefault("PYTHONIOENCODING", "utf-8")
+    return e
+
+
+def run(cmd: list[str], cfg: dict, log: Path) -> int:
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("a", encoding="utf-8", errors="replace") as f:
+        f.write(f"\n$ {' '.join(cmd)}\n")
+        f.flush()
+        return subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, env=env(cfg)).returncode
+
+
+def healthy(url: str, timeout: float = 2.0) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return 200 <= r.status < 500
+    except Exception:
+        return False
+
+
+def wait_healthy(url: str, seconds: int = 60) -> bool:
+    for _ in range(seconds):
+        if healthy(url):
+            return True
+        time.sleep(1)
+    return False
+
+
+# --------------------------------------------------------------------------
+# setup / doctor / serve
+# --------------------------------------------------------------------------
+def cmd_setup(args, cfg: dict) -> int:
+    pvt = resolve(args.reuse_pvt or cfg["pyvideotrans_home"])
+    itt = resolve(args.reuse_itt or cfg["index_tts2_home"])
+    cfg["pyvideotrans_home"] = str(pvt)
+    cfg["index_tts2_home"] = str(itt)
+    for d in (LOGS, STATE, TOOLS):
+        d.mkdir(parents=True, exist_ok=True)
+
+    print(f"[setup] pyVideoTrans home: {pvt}")
+    if pvt == PVT_DEFAULT.resolve():
+        cmd = [sys.executable, str(WRAPPER), "setup", "--models", cfg["asr_model"]]
+        if args.proxy:
+            cmd += ["--proxy", args.proxy]
+        rc = run(cmd, cfg, LOGS / "setup_pyvideotrans.log")
+        if rc != 0:
+            print(f"[setup] pyVideoTrans setup failed (rc={rc}); see .runtime/logs/setup_pyvideotrans.log")
+            return rc
+    else:
+        print("[setup] external pyVideoTrans: skip dependency install")
+
+    print(f"[setup] IndexTTS2 home: {itt}")
+    if itt == ITT_DEFAULT.resolve():
+        rc = run([sys.executable, str(itt / "scripts" / "indextts2.py"), "setup"],
+                 cfg, LOGS / "setup_indextts2.log")
+        if rc != 0:
+            print(f"[setup] IndexTTS2 setup failed (rc={rc}); see .runtime/logs/setup_indextts2.log")
+            return rc
+    else:
+        print("[setup] external IndexTTS2: skip dependency install")
+
+    # Rubberband is optional but strongly recommended for audio time-stretch.
+    if not shutil.which("rubberband", path=env(cfg)["PATH"]):
+        print("[setup] WARNING: rubberband not found. Windows bundle should include "
+              "tools/rubberband; Linux: apt install rubberband-cli; macOS: brew install rubberband")
+
+    # Configure pyVideoTrans credentials/channels.
+    params_path = pvt / "videotrans" / "params.json"
+    params = {}
+    if params_path.exists():
+        try:
+            params = json.loads(params_path.read_text(encoding="utf-8"))
+        except Exception:
+            params = {}
+    key = args.deepseek_key or os.environ.get("DEEPSEEK_API_KEY", "")
+    params.update({
+        "translate_type": 5,
+        "deepseek_key": key or params.get("deepseek_key", ""),
+        "deepseek_model": cfg["deepseek_model"],
+        "tts_type": 12 if cfg["backend"] == "index" else 1,
+        "index_url": cfg["index_url"],
+        "indextts_version": 0,
+        "model_name": cfg["asr_model"],
+        "stt_model_name": cfg["asr_model"],
+    })
+    params_path.parent.mkdir(parents=True, exist_ok=True)
+    params_path.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    cfg["deepseek_model"] = params.get("deepseek_model", cfg["deepseek_model"])
+    save_config(cfg)
+    print(f"[setup] wrote {CONFIG}")
+    if not params.get("deepseek_key"):
+        print("[setup] NOTE: no DeepSeek key. Set DEEPSEEK_API_KEY or pass --deepseek-key.")
+    return cmd_doctor(args, cfg)
+
+
+def cmd_doctor(_args, cfg: dict) -> int:
+    pvt = Path(cfg["pyvideotrans_home"])
+    itt = Path(cfg["index_tts2_home"])
+    checks = []
+
+    def add(name: str, ok: bool, detail: str = ""):
+        checks.append((name, ok, detail))
+        print(f"[{'OK ' if ok else 'FAIL'}] {name:28} {detail}")
+
+    add("OS", True, f"{platform.system()} {platform.machine()}")
+    add("uv", bool(shutil.which("uv") or (TOOLS / "uv").exists()),
+        shutil.which("uv") or str(TOOLS / "uv"))
+    add("ffmpeg", bool(shutil.which("ffmpeg") or (TOOLS / "ffmpeg" / "bin" / "ffmpeg.exe").exists()),
+        shutil.which("ffmpeg") or str(TOOLS / "ffmpeg" / "bin"))
+    add("rubberband", bool(shutil.which("rubberband", path=env(cfg)["PATH"])),
+        "pitch-preserving time stretch")
+    add("pyVideoTrans source", (pvt / "cli.py").exists(), str(pvt))
+    add("pyVideoTrans venv", pvt_python(cfg).exists(), str(pvt_python(cfg)))
+    add("IndexTTS2 source", (itt / "scripts" / "indextts2.py").exists(), str(itt))
+    add("IndexTTS2 venv", itt_python(cfg).exists(), str(itt_python(cfg)))
+    add("IndexTTS2 checkpoints", (itt / "checkpoints" / "gpt.pth").exists(),
+        str(itt / "checkpoints"))
+    params = pvt / "videotrans" / "params.json"
+    key = ""
+    if params.exists():
+        try:
+            key = json.loads(params.read_text(encoding="utf-8")).get("deepseek_key", "")
+        except Exception:
+            pass
+    add("DeepSeek key", bool(key or os.environ.get("DEEPSEEK_API_KEY")),
+        "env or params.json")
+    add("Index API :8791", healthy(cfg["index_api"] + "/health"), cfg["index_api"])
+    add("Gradio shim :7861", healthy(cfg["index_url"] + "/"), cfg["index_url"])
+    add("glossary", Path(cfg["glossary"]).exists(), cfg["glossary"])
+
+    critical = [ok for name, ok, _ in checks
+                if name in ("pyVideoTrans source", "pyVideoTrans venv",
+                            "IndexTTS2 source", "IndexTTS2 venv")]
+    return 0 if all(critical) else 1
+
+
+def _pid_file(name: str) -> Path:
+    return STATE / f"{name}.pid"
+
+
+def _read_pid(name: str) -> int | None:
+    p = _pid_file(name)
+    try:
+        return int(p.read_text().strip())
+    except Exception:
+        return None
+
+
+def _kill(name: str) -> None:
+    pid = _read_pid(name)
+    if not pid:
+        return
+    try:
+        if IS_WINDOWS:
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                           capture_output=True)
+        else:
+            killpg = getattr(os, "killpg", None)
+            (killpg(pid, 15) if killpg else os.kill(pid, 15))
+    except Exception:
+        pass
+    _pid_file(name).unlink(missing_ok=True)
+
+
+def _popen_kwargs() -> dict:
+    if IS_WINDOWS:
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def cmd_serve(args, cfg: dict) -> int:
+    STATE.mkdir(parents=True, exist_ok=True)
+    LOGS.mkdir(parents=True, exist_ok=True)
+    if args.stop:
+        _kill("shim")
+        _kill("api")
+        print("[serve] stopped")
+        return 0
+    if healthy(cfg["index_url"] + "/") and healthy(cfg["index_api"] + "/health"):
+        print("[serve] already running")
+        return 0
+    py = itt_python(cfg)
+    if not py.exists():
+        print(f"[serve] IndexTTS2 venv missing: {py}; run setup")
+        return 2
+    api_log = (LOGS / "index_api.log").open("a", encoding="utf-8", errors="replace")
+    api = subprocess.Popen(
+        [str(py), str(Path(cfg["index_tts2_home"]) / "scripts" / "indextts2.py"),
+         "api", "--listen-port", str(cfg["index_api_port"]), "--json"],
+        stdout=api_log, stderr=subprocess.STDOUT, env=env(cfg), **_popen_kwargs())
+    _pid_file("api").write_text(str(api.pid))
+    print(f"[serve] IndexTTS2 API pid={api.pid} -> {cfg['index_api']}")
+
+    shenv = env(cfg)
+    shenv["INDEXTTS2_API"] = cfg["index_api"]
+    shenv["INDEXTTS2_FAST"] = "1" if cfg.get("index_fast") else "0"
+    shenv["INDEXTTS2_RESTART_EVERY"] = str(cfg.get("index_restart_every", 25))
+    shenv["INDEXTTS2_CLI"] = str(itt_cli(cfg))
+    shenv["SHIM_PORT"] = str(cfg["shim_port"])
+    shim_log = (LOGS / "gradio_shim.log").open("a", encoding="utf-8", errors="replace")
+    shim = subprocess.Popen([str(py), str(SHIM)], stdout=shim_log, stderr=subprocess.STDOUT,
+                            env=shenv, **_popen_kwargs())
+    _pid_file("shim").write_text(str(shim.pid))
+    print(f"[serve] Gradio shim pid={shim.pid} -> {cfg['index_url']}")
+
+    ok_api = wait_healthy(cfg["index_api"] + "/health", 60)
+    ok_shim = wait_healthy(cfg["index_url"] + "/", 60)
+    print(f"[serve] api={ok_api} shim={ok_shim}")
+    return 0 if ok_api and ok_shim else 1
+
+
+# --------------------------------------------------------------------------
+# pipeline
+# --------------------------------------------------------------------------
+def videos(cfg: dict, arg: str) -> list[tuple[str, Path]]:
+    src = Path(cfg["src_dir"])
+    if not src.is_dir():
+        raise SystemExit(f"--src not found: {src}")
+    all_v = sorted(src.glob("*.mp4"))
+    if arg.strip().lower() in ("all", "*", ""):
+        return [(p.stem, p) for p in all_v]
+    wanted = {x.strip() for x in arg.split(",") if x.strip()}
+    out = [(p.stem, p) for p in all_v
+           if p.stem in wanted or any(p.stem.startswith(w) for w in wanted)]
+    if not out:
+        raise SystemExit(f"no videos matched {arg!r}")
+    return out
+
+
+def paths(cfg: dict, stem: str) -> dict:
+    out = Path(cfg["out_dir"])
+    work = resolve(cfg["work_dir"], out)
+    return {
+        "prep": work / "prep" / stem,
+        "dub": work / stem,
+        "final": out / f"{stem}{cfg.get('final_suffix', '')}.mp4",
+        "subs": out / "_字幕",
+        "log": LOGS / f"{stem}.log",
+    }
+
+
+def state_path(stem: str) -> Path:
+    return STATE / f"{stem}.json"
+
+
+def load_state(stem: str) -> dict:
+    p = state_path(stem)
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_state(stem: str, **kw) -> None:
+    d = load_state(stem)
+    d.update(kw)
+    d["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    state_path(stem).write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def wrapper_cmd(cfg: dict, *args: str) -> list[str]:
+    return [sys.executable, str(WRAPPER), *args, "--home", cfg["pyvideotrans_home"]]
+
+
+def asr_one(cfg: dict, stem: str, src: Path, force: bool = False) -> bool:
+    p = paths(cfg, stem)
+    en = p["prep"] / "en.srt"
+    if en.exists() and not force:
+        print(f"[prep] {stem}: ASR cached")
+        return True
+    p["prep"].mkdir(parents=True, exist_ok=True)
+    stt_dir = p["prep"] / "stt"
+    shutil.rmtree(stt_dir, ignore_errors=True)
+    cmd = wrapper_cmd(cfg, "stt", str(src), "--source", cfg["source_lang"],
+                      "--asr-model", cfg["asr_model"], "--outdir", str(stt_dir),
+                      "--overwrite")
+    rc = run(cmd, cfg, p["log"])
+    produced = stt_dir / f"{stem}.srt"
+    if rc != 0 or not produced.exists():
+        print(f"[prep] {stem}: ASR failed rc={rc}")
+        return False
+    shutil.copy2(produced, en)
+    save_state(stem, asr=True)
+    print(f"[prep] {stem}: ASR -> {en}")
+    return True
+
+
+def mt_one(cfg: dict, stem: str, force: bool = False) -> bool:
+    p = paths(cfg, stem)
+    en = p["prep"] / "en.srt"
+    target = p["prep"] / f"{cfg['target_lang']}.srt"
+    if not en.exists():
+        print(f"[prep] {stem}: no en.srt")
+        return False
+    if target.exists() and not force:
+        print(f"[prep] {stem}: translation cached")
+        return True
+    mt_dir = p["prep"] / "mt"
+    shutil.rmtree(mt_dir, ignore_errors=True)
+    cmd = wrapper_cmd(cfg, "sts", str(en), "--source", cfg["source_lang"],
+                      "--target", cfg["target_lang"], "--channel", cfg["translate_channel"],
+                      "--outdir", str(mt_dir), "--overwrite")
+    rc = run(cmd, cfg, p["log"])
+    produced = mt_dir / f"en.{cfg['target_lang']}.srt"
+    if not produced.exists():
+        alternatives = list(mt_dir.glob(f"*.{cfg['target_lang']}.srt"))
+        produced = alternatives[0] if alternatives else produced
+    if rc != 0 or not produced.exists():
+        print(f"[prep] {stem}: translation failed rc={rc}")
+        return False
+    shutil.copy2(produced, target)
+    save_state(stem, mt=True)
+    print(f"[prep] {stem}: MT -> {target}")
+    return True
+
+
+def prep(cfg: dict, items: list[tuple[str, Path]], force: bool = False) -> bool:
+    ok = True
+    for stem, src in items:
+        ok = asr_one(cfg, stem, src, force) and ok
+    workers = max(1, min(int(cfg.get("mt_workers", 4)), len(items)))
+    if workers > 1:
+        with cf.ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(lambda it: mt_one(cfg, it[0], force), items))
+        ok = ok and all(results)
+    else:
+        for stem, _ in items:
+            ok = mt_one(cfg, stem, force) and ok
+    return ok
+
+
+def dub_one(cfg: dict, stem: str, src: Path, force: bool = False) -> bool:
+    p = paths(cfg, stem)
+    en = p["prep"] / "en.srt"
+    target = p["prep"] / f"{cfg['target_lang']}.srt"
+    if not en.exists() or not target.exists():
+        print(f"[dub] {stem}: missing prep SRT")
+        return False
+    p["dub"].mkdir(parents=True, exist_ok=True)
+    shutil.copy2(en, p["dub"] / f"{cfg['source_lang']}.srt")
+    shutil.copy2(target, p["dub"] / f"{cfg['target_lang']}.srt")
+    subtitle_type = {"none": 0, "hard": 1, "soft": 2, "dual-hard": 3,
+                     "dual-soft": 4}.get(cfg.get("subtitle_mode", "hard"), 1)
+    cmd = wrapper_cmd(
+        cfg, "vtv", str(src),
+        "--source", cfg["source_lang"], "--target", cfg["target_lang"],
+        "--channel", cfg["translate_channel"],
+        "--tts-channel", cfg["backend"], "--voice", "clone",
+        "--subtitle-type", str(subtitle_type),
+        "--outdir", str(p["dub"]), "--overwrite", "--no-clear-cache",
+        "--extra-args=--voice_autorate")
+    rc = run(cmd, cfg, p["log"])
+    produced = p["dub"] / f"{stem}.mp4"
+    if rc != 0 or not produced.exists():
+        print(f"[dub] {stem}: failed rc={rc}")
+        return False
+    save_state(stem, dub=True)
+    print(f"[dub] {stem}: -> {produced}")
+    return True
+
+
+def post_one(cfg: dict, stem: str) -> bool:
+    p = paths(cfg, stem)
+    src_mp4 = p["dub"] / f"{stem}.mp4"
+    if not src_mp4.exists():
+        print(f"[post] {stem}: no work mp4")
+        return False
+    p["final"].parent.mkdir(parents=True, exist_ok=True)
+    tmp = p["final"].with_suffix(".tmp.mp4")
+    rc = run(["ffmpeg", "-y", "-v", "error", "-i", str(src_mp4),
+              "-c:v", "copy", "-af", f"loudnorm=I={cfg.get('loudness', -18)}:TP=-1.5:LRA=11",
+              "-ar", "48000", "-c:a", "aac", "-b:a", "192k", str(tmp)],
+             cfg, p["log"])
+    if rc != 0 or not tmp.exists():
+        print(f"[post] {stem}: loudnorm failed rc={rc}")
+        return False
+    tmp.replace(p["final"])
+    p["subs"].mkdir(parents=True, exist_ok=True)
+    target_srt = p["subs"] / f"{stem}.{cfg['target_lang']}.srt"
+    source_srt = p["subs"] / f"{stem}.{cfg['source_lang']}.srt"
+    for name, dest in ((f"{cfg['target_lang']}.srt", target_srt),
+                       (f"{cfg['source_lang']}.srt", source_srt)):
+        s = p["dub"] / name
+        if s.exists():
+            shutil.copy2(s, dest)
+    rc = run([sys.executable, str(QC), "--video", str(p["final"]),
+              "--source", str(Path(cfg["src_dir"]) / f"{stem}.mp4"),
+              "--zh", str(target_srt), "--en", str(source_srt),
+              "--glossary", cfg["glossary"],
+              "--json-out", str(LOGS / f"{stem}.qc.json")],
+             cfg, p["log"])
+    save_state(stem, post=True, qc_ok=(rc == 0))
+    print(f"[post] {stem}: -> {p['final']} (qc_ok={rc == 0})")
+    return rc == 0
+
+
+def cmd_status(args, cfg: dict) -> int:
+    for stem, _ in videos(cfg, args.videos):
+        st = load_state(stem)
+        final = Path(cfg["out_dir"]) / f"{stem}{cfg.get('final_suffix', '')}.mp4"
+        print(f"{stem[:60]:60} asr={int(bool(st.get('asr')))} "
+              f"mt={int(bool(st.get('mt')))} dub={int(bool(st.get('dub')))} "
+              f"final={int(final.exists())} qc={st.get('qc_ok')}")
+    return 0
+
+
+def ensure_services(cfg: dict) -> None:
+    if cfg.get("backend") == "index" and not healthy(cfg["index_url"] + "/"):
+        print("[dub] Gradio shim not running; starting IndexTTS2 API + shim")
+        cmd_serve(argparse.Namespace(stop=False), cfg)
+
+
+def cmd_run(args, cfg: dict) -> int:
+    items = videos(cfg, args.videos)
+    ok = prep(cfg, items, args.force)
+    ensure_services(cfg)
+    for stem, src in items:
+        ok = dub_one(cfg, stem, src, args.force) and ok
+    for stem, _ in items:
+        ok = post_one(cfg, stem) and ok
+    return 0 if ok else 1
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Portable video translation pipeline")
+    sub = ap.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("setup", help="install dependencies/models and write config")
+    p.add_argument("--reuse-pvt", help="use an existing pyVideoTrans checkout")
+    p.add_argument("--reuse-itt", help="use an existing IndexTTS2 checkout")
+    p.add_argument("--deepseek-key", default="")
+    p.add_argument("--proxy", default="")
+    p.set_defaults(func=cmd_setup)
+
+    p = sub.add_parser("doctor", help="check dependencies")
+    p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("serve", help="start IndexTTS2 API + Gradio shim")
+    p.add_argument("--stop", action="store_true")
+    p.set_defaults(func=cmd_serve)
+
+    for name in ("prep", "dub", "post", "run", "status", "ab", "polish", "qc", "report"):
+        p = sub.add_parser(name)
+        p.add_argument("--src", default="", help="source directory of mp4 files")
+        p.add_argument("--out", default="", help="output directory")
+        p.add_argument("--work", dest="work_dir", default="", help="work directory (default: <out>/_work)")
+        p.add_argument("--videos", default="all")
+        p.add_argument("--source", dest="source_lang", default="")
+        p.add_argument("--target", dest="target_lang", default="")
+        p.add_argument("--backend", default="", choices=["", "index", "qwen3local", "f5"])
+        p.add_argument("--subtitle", dest="subtitle_mode", default="",
+                       choices=["", "none", "hard", "soft", "dual-hard", "dual-soft"])
+        p.add_argument("--force", action="store_true")
+        p.add_argument("--mt-workers", type=int, default=0)
+        p.add_argument("--video", default="")
+        p.add_argument("--source-video", default="")
+        p.add_argument("--zh", default="")
+        p.add_argument("--en", default="")
+        p.add_argument("--glossary", default="")
+        p.add_argument("--stem", default="")
+        p.add_argument("--mode", default="")
+        p.add_argument("--blocks", type=int, default=30)
+        p.add_argument("--logs", default="")
+        p.add_argument("--json-out", default="")
+        p.set_defaults(func=None)
+
+    args = ap.parse_args()
+    cfg = load_config()
+    for key in ("src_dir", "out_dir", "work_dir", "source_lang", "target_lang",
+                "backend", "subtitle_mode", "mt_workers"):
+        val = getattr(args, key, None)
+        if val not in (None, "", 0):
+            cfg[key] = val
+    if args.command in ("prep", "dub", "post", "run", "status") and not cfg.get("src_dir"):
+        ap.error("--src is required (or set src_dir in config.json)")
+    if args.command in ("prep", "dub", "post", "run", "status") and not cfg.get("out_dir"):
+        ap.error("--out is required (or set out_dir in config.json)")
+    if cfg.get("src_dir"):
+        cfg["src_dir"] = str(resolve(cfg["src_dir"]))
+    if cfg.get("out_dir"):
+        cfg["out_dir"] = str(resolve(cfg["out_dir"]))
+    if cfg.get("glossary"):
+        cfg["glossary"] = str(resolve(cfg["glossary"]))
+
+    if args.command == "setup":
+        return cmd_setup(args, cfg)
+    if args.command == "doctor":
+        return cmd_doctor(args, cfg)
+    if args.command == "serve":
+        return cmd_serve(args, cfg)
+    if args.command in ("prep", "dub", "post", "run", "status"):
+        if args.command == "status":
+            return cmd_status(args, cfg)
+        if args.command == "prep":
+            return 0 if prep(cfg, videos(cfg, args.videos), args.force) else 1
+        if args.command == "dub":
+            ensure_services(cfg)
+            ok = True
+            for stem, src in videos(cfg, args.videos):
+                ok = dub_one(cfg, stem, src, args.force) and ok
+            return 0 if ok else 1
+        if args.command == "post":
+            ok = True
+            for stem, _ in videos(cfg, args.videos):
+                ok = post_one(cfg, stem) and ok
+            return 0 if ok else 1
+        return cmd_run(args, cfg)
+    if args.command == "qc":
+        cmd = [sys.executable, str(QC), "--video", args.video, "--zh", args.zh,
+               "--en", args.en, "--source", args.source_video or args.video,
+               "--glossary", args.glossary or cfg["glossary"]]
+        if args.json_out:
+            cmd += ["--json-out", args.json_out]
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=env(cfg))
+        if p.stdout:
+            print(p.stdout)
+        if p.stderr:
+            print(p.stderr, file=sys.stderr)
+        return p.returncode
+    if args.command == "ab":
+        ab_py = pvt_python(cfg) if pvt_python(cfg).exists() else Path(sys.executable)
+        return run([str(ab_py), str(AB), "--stem", args.stem, "--mode", args.mode,
+                    "--blocks", str(args.blocks), "--src", cfg["src_dir"],
+                    "--out", str(Path(cfg["out_dir"]) / "_ab"),
+                    "--index-api", cfg["index_api"]], cfg, LOGS / "ab.log")
+    if args.command == "polish":
+        return run([sys.executable, str(POLISH), "--srt", args.zh or args.video,
+                    "--glossary", args.glossary or cfg["glossary"],
+                    "--out", args.json_out or ((args.zh or args.video) + ".polished.srt")],
+                   cfg, LOGS / "polish.log")
+    if args.command == "report":
+        logs = args.logs or str(LOGS)
+        return run([sys.executable, str(REPORT), "--logs", logs,
+                    "--out", str(Path(cfg["out_dir"]) / "QC_SUMMARY.md")],
+                   cfg, LOGS / "report.log")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,42 @@
+# 本机配置与密钥（不要提交）
+/config.json
+vendor/pyvideotrans/videotrans/params.json
+vendor/pyvideotrans/videotrans/params.json*
+vendor/pyvideotrans/videotrans/cfg.json
+
+# Python 环境与缓存
+.venv/
+venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# 模型权重 / checkpoints / 下载缓存
+models/
+checkpoints/
+vendor/*/models/
+vendor/*/checkpoints/
+vendor/pyvideotrans/models/
+vendor/index-tts2-cli/checkpoints/
+
+# 运行状态、日志、临时文件和生成物
+.runtime/
+logs/
+vendor/pyvideotrans/logs/
+vendor/pyvideotrans/tmp/
+vendor/pyvideotrans/output/
+vendor/index-tts2-cli/runtime/
+vendor/index-tts2-cli/out/
+*.log
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+
+# 本地工作目录（若放在技能目录内）
+_work/
+work/
