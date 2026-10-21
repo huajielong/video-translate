@@ -20,9 +20,12 @@
 
 - 逐句从原片对应时间段裁参考音频（人声分离开启时从 `vocal.wav` 裁）。
 - IndexTTS2 beam=3；实测 beam=1 只快约 10–20%，不建议为速度牺牲韵律。
-- `--voice_autorate`：配音超过字幕槽时加速；Rubberband 保音色。`max_audio_speed_rate=30` 是兜底，不应触发。
+- `--voice_autorate`：配音超过字幕槽时加速；Rubberband 保音色。`max_audio_speed_rate=2.5` 是兜底；
+  正常应靠 `fit_merge`/`fit_condense` 把“配音/槽位”压到 1.1× 左右，而不是靠大倍率加速。
+  完整机制、调参、预测模型标定见 `audio-fit.md`。
 - 单句参考太短/含噪声会不稳定；有 BGM 时建议预分离人声。
-- 多说话人：逐句参考天然跟随说话人；如需更高一致性，可做说话人聚类后共用参考（未内置）。
+- 多说话人：`clone_ref_mode=cluster` 用 CAMPPlus 对逐句参考聚类，每人一个参考；
+  `fit_merge` 只合并同一参考（同一说话人）的相邻短句，不会跨说话人合并。
 
 ## 响度与音频
 

@@ -70,10 +70,21 @@ python scripts/pipeline.py setup \
 ## 更新
 
 - 替换 `vendor/pyvideotrans` 或 `vendor/index-tts2-cli` 后，重新跑 `setup`（依赖/模型已缓存则秒回）。
-- 本项目对 vendor 的补丁见 `references/quality.md` 与 `references/pipeline.md`；升级上游后需重新应用：
-  - `_rate.py` concat 强制 48k/2ch
-  - `_stage_dubbing.py` 按时间重叠配对、逐行缓存
+- 本项目对 vendor 的补丁见 `references/quality.md`、`references/pipeline.md`、
+  `references/audio-fit.md`；升级上游后需重新应用：
+  - `_rate.py` concat 强制 48k/2ch；音频-only 短句放慢填缝、第一句不吞片头
+  - `_stage_dubbing.py` 按时间重叠配对、逐行缓存、每视频固定参考（`clone_fixed.wav`）
+  - `_stage_dubbing.py` 配音单元拟合：`fit_merge`/`fit_condense`（同说话人合并、
+    实际缓存时长判断、DeepSeek 压缩、术语保护、`thinking=disabled`）
   - `_stage_translate.py` / `translate_srt.py` 超长块拆分
   - `_srt_wrap.py` 平衡两行、术语不拆
   - `_qwenttslocal.py` 纯 clone 只要求 Base
   - `cli.py` 修复 `video_autorate` 未写入
+  - `configure/_paths.py` 支持 `VTV_DUBBING_CACHE` 隔离缓存
+  - `tts/_index.py` 直连 `/v1/tts`、重启/绑核兜底
+  - `scripts/gradio_shim.py` 把 Gradio 的临时参考路径按内容哈希归一化为 `.runtime/ref_cache/<sha256>.wav`；否则每句路径都变，参考缓存永远不命中
+  - `index-tts2-cli/indextts/infer_v2.py` probe 字段、`INDEXTTS2_DIFFUSION_STEPS`
+  - `index-tts2-cli/scripts/itts/srv.py` daemon 启动自绑定（High + `0xFFFF`）
+
+> `pipeline.py serve --stop` 只停 API 和 shim，**不会停 IndexTTS2 守护进程**。需要彻底释放显存/换新进程时执行
+> `vendor/index-tts2-cli/venv/Scripts/python.exe vendor/index-tts2-cli/scripts/indextts2.py stop --force`。

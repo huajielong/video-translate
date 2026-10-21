@@ -6,9 +6,12 @@ pyVideoTrans's `index` TTS channel calls a Gradio app endpoint named
 forwards those calls to the IndexTTS2 HTTP API (POST /v1/tts) and returns
 the generated wav path.
 """
+import hashlib
 import os
+import shutil
 import subprocess
 import time
+from pathlib import Path
 
 import gradio as gr
 import requests
@@ -26,6 +29,30 @@ if not ITT_CLI:
         ITT_CLI = os.path.join(_scripts, "indextts2.cmd" if os.name == "nt" else "indextts2.sh")
 
 _counter = 0
+
+_SKILL_DIR = Path(__file__).resolve().parent.parent
+REF_CACHE = Path(os.environ.get(
+    "INDEXTTS2_REF_CACHE", str(_SKILL_DIR / ".runtime" / "ref_cache")))
+
+
+def _stable_ref(prompt: str) -> str:
+    """Give IndexTTS2 a path that is stable for identical reference audio.
+
+    Gradio uploads every request to a fresh temp directory, so the same
+    reference file arrives under a different path each line.  IndexTTS2
+    caches speaker/style features by path; normalising by content hash lets
+    the cache hit across lines (and across the whole video).
+    """
+    try:
+        digest = hashlib.sha256(Path(prompt).read_bytes()).hexdigest()
+        dest = REF_CACHE / f"{digest}.wav"
+        if not dest.exists():
+            REF_CACHE.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(prompt, dest)
+            print(f"[shim] new stable reference: {dest}", flush=True)
+        return str(dest)
+    except Exception:
+        return prompt
 
 # IndexTTS2 writes results into its own out_dir, outside this app's sandbox.
 # Fetch it from the API so Gradio is allowed to serve those files.
@@ -62,6 +89,7 @@ def gen_single(prompt, text):
     if not text or not text.strip():
         raise gr.Error("missing text")
     _counter += 1
+    prompt = _stable_ref(prompt)
     name = f"bridge_{int(time.time() * 1000)}_{os.getpid()}_{_counter}.wav"
     payload = {"text": text.strip(), "voice": prompt, "output_name": name}
     if FAST:

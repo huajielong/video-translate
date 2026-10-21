@@ -61,8 +61,38 @@ DEFAULTS = {
     "index_api_port": 8791,
     "shim_port": 7861,
     "index_fast": False,
-    "index_restart_every": 25,
+    "index_restart_every": 0,
+    "restart_before_tts": True,
+    "pin_daemon": True,
+    "probe": True,
+    "daemon_affinity_mask": "0xFFFF",
+    "gpu_lock_clock": 0,
+    "clone_ref_mode": "cluster",
+    "speaker_max": 0,
+    "speaker_threshold": 0.72,
+    "speaker_merge_sim": 0.80,
+    "speaker_self_consistency": 0.55,
     "mt_workers": 4,
+    "voice_autorate": True,
+    # video_autorate 会重建视频；当前上游实现会丢掉片头/片尾，先默认关闭，
+    # 修好 head/tail 与时长容差后再开启。
+    "video_autorate": False,
+    # 配音单元拟合：合并同说话人的相邻短句，再压缩仍超长的句子。
+    # 预测模型按 IndexTTS2 实测拟合：audio ≈ 1.30s + 0.123s/汉字。
+    "fit_merge": True,
+    "fit_condense": True,
+    # 仅 IndexTTS2 自动启用；其他后端标定后可用 fit_force 强制
+    "fit_force": False,
+    "fit_max_speed": 1.12,
+    "fit_max_chars": 36,
+    "fit_gap_ms": 500,
+    "fit_pred_a": 1.30,
+    "fit_pred_b": 0.123,
+    "fit_condense_speed": 1.25,
+    "max_audio_speed_rate": 2.5,
+    "max_audio_slow_rate": 1.2,
+    "max_video_pts_rate": 1.5,
+    "dubb_min_pause_ms": 200,
     "loudness": -18.0,
     "final_suffix": "",
     "glossary": "assets/glossary.txt",
@@ -127,6 +157,36 @@ def env(cfg: dict) -> dict:
     e["PATH"] = os.pathsep.join(paths + [e.get("PATH", "")])
     e["PYVIDEOTRANS_HOME"] = cfg["pyvideotrans_home"]
     e["INDEXTTS2_HOME"] = cfg["index_tts2_home"]
+    e["INDEXTTS2_API"] = cfg["index_api"]
+    e["INDEXTTS2_FAST"] = "1" if cfg.get("index_fast") else "0"
+    e["INDEXTTS2_CLI"] = str(itt_cli(cfg))
+    e["INDEXTTS2_RESTART_EVERY"] = str(cfg.get("index_restart_every", 0))
+    e["VTV_RESTART_BEFORE_TTS"] = "1" if cfg.get("restart_before_tts", True) else "0"
+    e["VTV_PIN_DAEMON"] = "1" if cfg.get("pin_daemon", True) else "0"
+    e["VTV_MAX_AUDIO_SPEED_RATE"] = str(cfg.get("max_audio_speed_rate", 30.0))
+    e["VTV_MAX_AUDIO_SLOW_RATE"] = str(cfg.get("max_audio_slow_rate", 1.2))
+    e["VTV_MAX_VIDEO_PTS_RATE"] = str(cfg.get("max_video_pts_rate", 1.5))
+    e["VTV_DUBB_MIN_PAUSE_MS"] = str(cfg.get("dubb_min_pause_ms", 200))
+    e["VTV_FIT_MERGE"] = "1" if cfg.get("fit_merge", True) else "0"
+    e["VTV_FIT_CONDENSE"] = "1" if cfg.get("fit_condense", True) else "0"
+    e["VTV_FIT_FORCE"] = "1" if cfg.get("fit_force", False) else "0"
+    e["VTV_FIT_MAX_SPEED"] = str(cfg.get("fit_max_speed", 1.12))
+    e["VTV_FIT_MAX_CHARS"] = str(cfg.get("fit_max_chars", 36))
+    e["VTV_FIT_GAP_MS"] = str(cfg.get("fit_gap_ms", 500))
+    e["VTV_FIT_PRED_A"] = str(cfg.get("fit_pred_a", 1.30))
+    e["VTV_FIT_PRED_B"] = str(cfg.get("fit_pred_b", 0.123))
+    e["VTV_FIT_CONDENSE_SPEED"] = str(cfg.get("fit_condense_speed", 1.25))
+    e["VTV_GLOSSARY_FILE"] = str(cfg.get("glossary", ""))
+    e["VTV_CLONE_REF_MODE"] = str(cfg.get("clone_ref_mode", "cluster") or "cluster")
+    e["VTV_SPK_MAX"] = str(cfg.get("speaker_max", 0) or 0)
+    e["VTV_SPK_THRESHOLD"] = str(cfg.get("speaker_threshold", 0.72) or 0.72)
+    e["VTV_SPK_MERGE_SIM"] = str(cfg.get("speaker_merge_sim", 0.80) or 0.80)
+    e["VTV_SPK_SELF_CONSISTENCY"] = str(
+        cfg.get("speaker_self_consistency", 0.55) or 0.55)
+    try:
+        e["VTV_ITT_PYTHON"] = str(itt_python(cfg))
+    except Exception:
+        pass
     e.setdefault("PYTHONUTF8", "1")
     e.setdefault("PYTHONIOENCODING", "utf-8")
     return e
@@ -299,45 +359,216 @@ def _popen_kwargs() -> dict:
     return {"start_new_session": True}
 
 
+def _index_env(cfg: dict) -> dict:
+    """Env for the IndexTTS2 API/shim: torch thread count for the daemon."""
+    e = env(cfg)
+    threads = str(cfg.get("index_threads", 0) or "")
+    if threads:
+        # Only OpenMP: forcing MKL/NumExpr to the same count made small GEMMs
+        # thrash (observed 4x slower GPT decode).
+        e["OMP_NUM_THREADS"] = threads
+    steps = str(cfg.get("index_diffusion_steps", 0) or "")
+    if steps:
+        e["INDEXTTS2_DIFFUSION_STEPS"] = steps
+    if cfg.get("probe", True):
+        e.setdefault("VTV_PROBE_FILE", str((LOGS / "tts_probe.jsonl").resolve()))
+    e.setdefault("INDEXTTS2_PIN_SELF",
+                 "1" if cfg.get("pin_daemon", True) else "0")
+    e.setdefault("INDEXTTS2_HIGH_PRIORITY",
+                 "1" if cfg.get("index_high_priority", True) else "0")
+    e.setdefault("INDEXTTS2_AFFINITY_MASK",
+                 str(cfg.get("daemon_affinity_mask", "0xFFFF")))
+    return e
+
+
+def _set_high_priority(pid: int) -> None:
+    """Raise a process to High priority (Windows) / nice -5 (POSIX)."""
+    if not IS_WINDOWS:
+        try:
+            os.setpriority(os.PRIO_PROCESS, int(pid), -5)
+        except Exception:
+            pass
+        return
+    try:
+        import ctypes
+        handle = ctypes.windll.kernel32.OpenProcess(0x0200 | 0x0400, False, int(pid))
+        if handle:
+            ctypes.windll.kernel32.SetPriorityClass(handle, 0x00000080)
+            ctypes.windll.kernel32.CloseHandle(handle)
+    except Exception:
+        pass
+
+
+def _api_daemon_pid(cfg: dict) -> int | None:
+    """The API's /health exposes the daemon pid once it is preloaded."""
+    try:
+        import urllib.request
+        with urllib.request.urlopen(cfg["index_api"] + "/health", timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return (data.get("daemon") or {}).get("pid")
+    except Exception:
+        return None
+
+
+def _daemon_state(cfg: dict) -> str | None:
+    try:
+        import urllib.request
+        with urllib.request.urlopen(cfg["index_api"] + "/health", timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return (data.get("daemon") or {}).get("state")
+    except Exception:
+        return None
+
+
+def _wait_daemon_ready(cfg: dict, seconds: int = 180) -> bool:
+    for _ in range(max(1, seconds)):
+        state = _daemon_state(cfg)
+        if state == "ready":
+            return True
+        if state == "failed":
+            return False
+        time.sleep(1)
+    return False
+
+
+def _nvidia_smi(*args: str) -> int:
+    exe = shutil.which("nvidia-smi")
+    if not exe and IS_WINDOWS:
+        exe = r"C:\Windows\System32\nvidia-smi.exe"
+    if not exe:
+        print("[gpu] nvidia-smi not found")
+        return 127
+    try:
+        cp = subprocess.run([exe, *args], capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=30)
+        if cp.returncode != 0:
+            msg = (cp.stderr or cp.stdout or "").strip()[:300]
+            print(f"[gpu] nvidia-smi {' '.join(args)} failed: {msg}")
+        return cp.returncode
+    except Exception as exc:  # noqa: BLE001
+        print(f"[gpu] nvidia-smi failed: {exc}")
+        return 1
+
+
+def _apply_gpu_clock(cfg: dict) -> None:
+    clock = int(cfg.get("gpu_lock_clock", 0) or 0)
+    if clock <= 0:
+        return
+    if _nvidia_smi("-lgc", f"{clock},{clock}") == 0:
+        print(f"[gpu] locked SM clock to {clock} MHz")
+
+
+def _reset_gpu_clock(cfg: dict) -> None:
+    if int(cfg.get("gpu_lock_clock", 0) or 0) > 0:
+        _nvidia_smi("-rgc")
+
+
+def _ac_power() -> bool | None:
+    """True=AC, False=battery, None=unknown/not Windows."""
+    if not IS_WINDOWS:
+        return None
+    try:
+        import ctypes
+
+        class PowerStatus(ctypes.Structure):
+            _fields_ = [
+                ("ACLineStatus", ctypes.c_byte),
+                ("BatteryFlag", ctypes.c_byte),
+                ("BatteryLifePercent", ctypes.c_byte),
+                ("Reserved1", ctypes.c_byte),
+                ("BatteryLifeTime", ctypes.c_ulong),
+                ("BatteryFullLifeTime", ctypes.c_ulong),
+            ]
+
+        status = PowerStatus()
+        if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status)):
+            return None
+        if status.ACLineStatus == 1:
+            return True
+        if status.ACLineStatus == 0:
+            return False
+    except Exception:
+        pass
+    return None
+
+
+def _check_power(args) -> bool:
+    if getattr(args, "allow_battery", False):
+        return True
+    ac = _ac_power()
+    if ac is False:
+        print("[power] battery power detected: CPU/GPU are throttled and TTS can be "
+              "2-3x slower. Connect AC, or pass --allow-battery to proceed.")
+        return False
+    return True
+
+
 def cmd_serve(args, cfg: dict) -> int:
     STATE.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
     if args.stop:
         _kill("shim")
         _kill("api")
+        _reset_gpu_clock(cfg)
         print("[serve] stopped")
         return 0
-    if healthy(cfg["index_url"] + "/") and healthy(cfg["index_api"] + "/health"):
+    api_ok = healthy(cfg["index_api"] + "/health")
+    shim_ok = healthy(cfg["index_url"] + "/")
+    if api_ok and shim_ok:
         print("[serve] already running")
+        # The daemon may have exited on its idle timeout; the first /v1/tts
+        # request will start it again.  Do not block serve for 3 minutes.
+        ready = _wait_daemon_ready(cfg, 5)
+        _apply_gpu_clock(cfg)
+        print(f"[serve] daemon_ready={ready}")
         return 0
     py = itt_python(cfg)
     if not py.exists():
         print(f"[serve] IndexTTS2 venv missing: {py}; run setup")
         return 2
-    api_log = (LOGS / "index_api.log").open("a", encoding="utf-8", errors="replace")
-    api = subprocess.Popen(
-        [str(py), str(Path(cfg["index_tts2_home"]) / "scripts" / "indextts2.py"),
-         "api", "--listen-port", str(cfg["index_api_port"]), "--json"],
-        stdout=api_log, stderr=subprocess.STDOUT, env=env(cfg), **_popen_kwargs())
-    _pid_file("api").write_text(str(api.pid))
-    print(f"[serve] IndexTTS2 API pid={api.pid} -> {cfg['index_api']}")
 
-    shenv = env(cfg)
-    shenv["INDEXTTS2_API"] = cfg["index_api"]
-    shenv["INDEXTTS2_FAST"] = "1" if cfg.get("index_fast") else "0"
-    shenv["INDEXTTS2_RESTART_EVERY"] = str(cfg.get("index_restart_every", 25))
-    shenv["INDEXTTS2_CLI"] = str(itt_cli(cfg))
-    shenv["SHIM_PORT"] = str(cfg["shim_port"])
-    shim_log = (LOGS / "gradio_shim.log").open("a", encoding="utf-8", errors="replace")
-    shim = subprocess.Popen([str(py), str(SHIM)], stdout=shim_log, stderr=subprocess.STDOUT,
-                            env=shenv, **_popen_kwargs())
-    _pid_file("shim").write_text(str(shim.pid))
-    print(f"[serve] Gradio shim pid={shim.pid} -> {cfg['index_url']}")
+    if not api_ok:
+        api_log = (LOGS / "index_api.log").open("a", encoding="utf-8", errors="replace")
+        api = subprocess.Popen(
+            [str(py), str(Path(cfg["index_tts2_home"]) / "scripts" / "indextts2.py"),
+             "api", "--listen-port", str(cfg["index_api_port"]), "--json"],
+            stdout=api_log, stderr=subprocess.STDOUT, env=_index_env(cfg), **_popen_kwargs())
+        _pid_file("api").write_text(str(api.pid))
+        if cfg.get("index_high_priority", True):
+            _set_high_priority(api.pid)
+        print(f"[serve] IndexTTS2 API pid={api.pid} -> {cfg['index_api']}")
+    else:
+        print("[serve] API already running")
 
-    ok_api = wait_healthy(cfg["index_api"] + "/health", 60)
-    ok_shim = wait_healthy(cfg["index_url"] + "/", 60)
-    print(f"[serve] api={ok_api} shim={ok_shim}")
-    return 0 if ok_api and ok_shim else 1
+    if not shim_ok:
+        shenv = _index_env(cfg)
+        shenv["INDEXTTS2_API"] = cfg["index_api"]
+        shenv["INDEXTTS2_FAST"] = "1" if cfg.get("index_fast") else "0"
+        shenv["INDEXTTS2_RESTART_EVERY"] = str(cfg.get("index_restart_every", 25))
+        shenv["INDEXTTS2_CLI"] = str(itt_cli(cfg))
+        shenv["SHIM_PORT"] = str(cfg["shim_port"])
+        shim_log = (LOGS / "gradio_shim.log").open("a", encoding="utf-8", errors="replace")
+        shim = subprocess.Popen([str(py), str(SHIM)], stdout=shim_log,
+                                stderr=subprocess.STDOUT, env=shenv, **_popen_kwargs())
+        _pid_file("shim").write_text(str(shim.pid))
+        if cfg.get("index_high_priority", True):
+            _set_high_priority(shim.pid)
+        print(f"[serve] Gradio shim pid={shim.pid} -> {cfg['index_url']}")
+    else:
+        print("[serve] shim already running")
+
+    ok_api = api_ok or wait_healthy(cfg["index_api"] + "/health", 60)
+    ok_shim = shim_ok or wait_healthy(cfg["index_url"] + "/", 60)
+    # A freshly started API preloads the daemon; an already-running API may
+    # have let it idle out, in which case the next request starts it again.
+    ready = _wait_daemon_ready(cfg, 180 if not api_ok else 5) if ok_api else False
+    if cfg.get("index_high_priority", True):
+        daemon_pid = _api_daemon_pid(cfg)
+        if daemon_pid:
+            _set_high_priority(daemon_pid)
+    _apply_gpu_clock(cfg)
+    print(f"[serve] api={ok_api} shim={ok_shim} daemon_ready={ready}")
+    return 0 if ok_api and ok_shim and (ready or api_ok) else 1
 
 
 # --------------------------------------------------------------------------
@@ -472,14 +703,20 @@ def dub_one(cfg: dict, stem: str, src: Path, force: bool = False) -> bool:
     shutil.copy2(target, p["dub"] / f"{cfg['target_lang']}.srt")
     subtitle_type = {"none": 0, "hard": 1, "soft": 2, "dual-hard": 3,
                      "dual-soft": 4}.get(cfg.get("subtitle_mode", "hard"), 1)
+    extra = []
+    if cfg.get("voice_autorate", True):
+        extra.append("--voice_autorate")
+    if cfg.get("video_autorate", True):
+        extra.append("--video_autorate")
     cmd = wrapper_cmd(
         cfg, "vtv", str(src),
         "--source", cfg["source_lang"], "--target", cfg["target_lang"],
         "--channel", cfg["translate_channel"],
         "--tts-channel", cfg["backend"], "--voice", "clone",
         "--subtitle-type", str(subtitle_type),
-        "--outdir", str(p["dub"]), "--overwrite", "--no-clear-cache",
-        "--extra-args=--voice_autorate")
+        "--outdir", str(p["dub"]), "--overwrite", "--no-clear-cache")
+    if extra:
+        cmd.append("--extra-args=" + " ".join(extra))
     rc = run(cmd, cfg, p["log"])
     produced = p["dub"] / f"{stem}.mp4"
     if rc != 0 or not produced.exists():
@@ -536,12 +773,18 @@ def cmd_status(args, cfg: dict) -> int:
 
 
 def ensure_services(cfg: dict) -> None:
-    if cfg.get("backend") == "index" and not healthy(cfg["index_url"] + "/"):
-        print("[dub] Gradio shim not running; starting IndexTTS2 API + shim")
+    if cfg.get("backend") != "index":
+        return
+    api_ok = healthy(cfg["index_api"] + "/health")
+    shim_ok = healthy(cfg["index_url"] + "/")
+    if not (api_ok and shim_ok):
+        print("[dub] IndexTTS2 API/shim not fully healthy; starting missing service")
         cmd_serve(argparse.Namespace(stop=False), cfg)
 
 
 def cmd_run(args, cfg: dict) -> int:
+    if not _check_power(args):
+        return 2
     items = videos(cfg, args.videos)
     ok = prep(cfg, items, args.force)
     ensure_services(cfg)
@@ -593,12 +836,20 @@ def main() -> int:
         p.add_argument("--blocks", type=int, default=30)
         p.add_argument("--logs", default="")
         p.add_argument("--json-out", default="")
+        p.add_argument("--allow-battery", action="store_true")
         p.set_defaults(func=None)
 
     args = ap.parse_args()
+    # `--src` / `--out` are stored as `src` / `out` by argparse, but the config
+    # merge below reads `src_dir` / `out_dir`.  Normalise them first so the
+    # CLI overrides actually take effect.
+    if getattr(args, "src", ""):
+        args.src_dir = args.src
+    if getattr(args, "out", ""):
+        args.out_dir = args.out
     cfg = load_config()
     for key in ("src_dir", "out_dir", "work_dir", "source_lang", "target_lang",
-                "backend", "subtitle_mode", "mt_workers"):
+                "backend", "subtitle_mode", "mt_workers", "glossary"):
         val = getattr(args, key, None)
         if val not in (None, "", 0):
             cfg[key] = val
@@ -625,6 +876,8 @@ def main() -> int:
         if args.command == "prep":
             return 0 if prep(cfg, videos(cfg, args.videos), args.force) else 1
         if args.command == "dub":
+            if not _check_power(args):
+                return 2
             ensure_services(cfg)
             ok = True
             for stem, src in videos(cfg, args.videos):

@@ -102,6 +102,17 @@ def estimate_lines(text: str, maxlen: int = 15) -> int:
     return greedy(text)
 
 
+def _term_in(term: str, text: str) -> bool:
+    """ASCII terms need word boundaries (so `batch` does not match `batching`)."""
+    if not term:
+        return False
+    if re.search(r"[A-Za-z0-9]", term):
+        return re.search(
+            r"(?<![A-Za-z0-9_])" + re.escape(term) + r"(?![A-Za-z0-9_])", text
+        ) is not None
+    return term in text
+
+
 def check_subtitles(zh_srt: str, en_srt: str | None, glossary: str | None) -> dict:
     zh = parse_srt(zh_srt)
     en = parse_srt(en_srt) if en_srt and Path(en_srt).exists() else []
@@ -137,17 +148,19 @@ def check_subtitles(zh_srt: str, en_srt: str | None, glossary: str | None) -> di
             if not line or "=" not in line:
                 continue
             src, tgt = [x.strip() for x in line.split("=", 1)]
-            if src and tgt and src.lower() in en_text:
+            if src and tgt and _term_in(src.lower(), en_text):
                 terms.append((src, tgt))
         if terms:
             zh_lower = "\n".join(texts).lower()
             hit = 0
             missing_terms = []
             for src, tgt in terms:
-                tgt_norm = re.sub(r"\s+", "", tgt)
+                # `src=tgt1|tgt2` means any of the listed translations is
+                # acceptable (GPU memory vs. agent memory, prompt vs. 提示...).
+                variants = [re.sub(r"\s+", "", v) for v in tgt.split("|") if v.strip()]
                 # Keeping a technical term in English (LLM, vLLM, token) is
-                # acceptable; require either the localized or the source form.
-                if tgt_norm in zh_norm or src.lower() in zh_lower:
+                # acceptable; require either a localized variant or the source.
+                if any(v in zh_norm for v in variants) or _term_in(src.lower(), zh_lower):
                     hit += 1
                 else:
                     missing_terms.append(src)

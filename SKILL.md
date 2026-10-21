@@ -41,6 +41,7 @@ python scripts/pipeline.py report --out "D:/translated"   # 汇总 QC 到 <out>/
 | 改 `config.json`、环境变量、路径解析 | `references/configuration.md` |
 | 理解阶段、并发、断点续跑、dub-only | `references/pipeline.md` |
 | 调字幕/翻译/克隆/响度/QC 质量 | `references/quality.md` |
+| 配音忽快忽慢、短句被加速、句间停顿、`fit_*` 标定 | `references/audio-fit.md` |
 | 首次安装、迁移新机器、端口与安全 | `references/deployment.md` |
 | 报错、变慢、两层字幕、CUDA_FATAL | `references/troubleshooting.md` |
 | 换翻译/TTS 渠道、查渠道编号 | `references/channels.md` |
@@ -56,3 +57,26 @@ IndexTTS2 服务本身的 API/音色/情感文档在 `vendor/index-tts2-cli/refe
 
 `index` 克隆后端、硬字幕、`en → zh-cn`、`mt_workers=4`、AAC 48 kHz、-18 LUFS、
 术语表 `assets/glossary.txt`。语言不写死：`--source` / `--target` / `--glossary` 均可配置。
+默认开启 `fit_merge` + `fit_condense`：先合并同说话人短句，再压缩仍超速的句子，
+避免短句被加速 2–3×；002 实测最大加速 2.75×→1.44×、>1.5× 由 21 句降到 0。
+详见 `references/audio-fit.md`；换后端/音色后用 `scripts/fit_calibrate.py` 重标定。
+
+## 通用能力（已内置）
+
+| 能力 | 入口 | 说明 |
+|---|---|---|
+| 克隆配音 | `--backend index` | IndexTTS2 零样本克隆；`clone_ref_mode=cluster` 按说话人共用参考 |
+| 配音自然度 | `fit_merge` / `fit_condense` | 合并同说话人短句 + 压缩仍超速句；见 `audio-fit.md` |
+| 句间停顿 | `max_audio_slow_rate` / `dubb_min_pause_ms` | 短句放慢填缝，减少长静音 |
+| TTS 稳定性 | `scripts/gpu_lock_task.cmd` / `scripts/tts_stability.py` | GPU 锁频、probe、逐句稳定性基准 |
+| 断点续跑 | `prep` / `dub` / `post` / `status` | 阶段状态 + 逐行 `DUBBING_CACHE` |
+| 质检 | `qc` / `report` | 时长、响度、字幕行数、术语命中 |
+| 标定 | `scripts/fit_calibrate.py` | 换后端/音色后重拟合配音时长模型 |
+
+## 本机注意（RTX 5070 Ti Laptop）
+
+GPU 跑到 ~2700MHz 会挤占 CPU，GPT 从 3.6s/句退化到 15–19s/句。
+先用**管理员**运行一次 `scripts\gpu_lock_task.cmd`，把 GPU 上限锁到 1200MHz；
+本机实测 002 全片 232 句 **5.79s/句、24m39s 完成**（历史慢态 69m28s）。
+撤销：`scripts\gpu_lock_task.cmd remove`。
+详见 `references/troubleshooting.md`。

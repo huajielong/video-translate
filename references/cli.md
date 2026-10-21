@@ -18,6 +18,8 @@
 | `ab` | IndexTTS2 vs Qwen3-TTS 基准 | `--stem` `--mode` | 结果写到 `<out>/_ab/` |
 | `polish` | 翻译后轻量审校（只改文本） | `--zh`（或 `--video`） | 输出默认 `<输入>.polished.srt` |
 | `report` | 汇总 `.runtime/logs/*.qc.json` | `--out`（或配置） | 输出 `<out>/QC_SUMMARY.md` |
+| `tts_stability` | 逐句 TTS 稳定性基准（`scripts/tts_stability.py`） | `--stem` `--src` `--out` | 直连 `/v1/tts`，采样 CPU/GPU/probe，输出到 `.runtime/stability/` |
+| `fit_calibrate` | 标定配音时长模型（`scripts/fit_calibrate.py`） | `--probe` `--pid` `--last` | 从 `tts_probe.jsonl` 拟合 `fit_pred_a/b`；换后端/音色后重跑 |
 
 ## 共享参数
 
@@ -35,6 +37,7 @@
 | `--subtitle MODE` | dub/run | `hard`（默认）/ `none` / `soft` / `dual-hard` / `dual-soft` |
 | `--mt-workers N` | prep/run | 翻译并发，默认取 `config.json` 的 4 |
 | `--force` | prep/run | 重跑 ASR 与翻译；**不会**清逐句配音缓存 |
+| `--allow-battery` | dub/run | 电池供电时仍允许跑 TTS；默认会拒绝并提示接电源 |
 | `--video FILE` | qc | 成品 MP4 |
 | `--source-video FILE` | qc | 源视频，用于时长/ASR 对照 |
 | `--zh FILE` / `--en FILE` | qc/polish | 目标/源字幕 |
@@ -69,6 +72,15 @@ python scripts/pipeline.py qc --video D:/out/a.mp4 --source-video D:/videos/a.mp
 # 审校已有译文（块数与时间轴不变）
 python scripts/pipeline.py polish --zh D:/out/_字幕/a.zh-cn.srt \
   --json-out D:/out/_字幕/a.polished.srt
+
+# TTS 稳定性基准：100 句、不重启 daemon、采样 CPU/GPU/probe
+python scripts/tts_stability.py --stem 002_Guidelines \
+  --src "D:/course/M1_Module 1" --out "D:/out" \
+  --zh "D:/out/_work/prep/002_Guidelines/zh-cn.srt" \
+  --blocks 100 --warmup 5 --restart-every 0
+
+# 换音色/后端后重标定配音时长模型（输出 fit_pred_a/b）
+python scripts/fit_calibrate.py --pid 14080
 ```
 
 ## 退出码

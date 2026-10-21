@@ -10,12 +10,25 @@
   │
   ├─ dub: vtv --no-clear-cache（预置 en.srt / zh-cn.srt，跳过 ASR/MT）
   │        prepare: 提取视频/音频、可选人声分离
-  │        dubbing: 逐句裁剪参考音频 → IndexTTS2 克隆
+  │        refs: 逐句裁剪参考音频 + 说话人聚类
+  │        fit: 合并同说话人短句 + 压缩仍超速句（TTS 前，只改文本/时间）
+  │        tts: IndexTTS2 克隆
   │        align: Rubberband 保音色变速 + 字幕重定时
   │        assembling: 硬/软字幕 + 音轨合成
   │
   └─ post: loudnorm -18 LUFS / 48 kHz → QC → 原子替换
 ```
+
+## 配音单元拟合（fit）
+
+`dub` 内部、说话人聚类之后、TTS 之前：
+
+- `fit_merge`：同一参考音色（同一说话人）、间隔 ≤500ms 的相邻短句，合并后 ≤36 字
+  且仍能两行显示，就合并成一个配音单元；优先合并最超速的句子。
+- `fit_condense`：合并后仍 >1.25× 的句子，用 DeepSeek 压到约 1.12×；
+  术语/英文技术词丢失则拒绝。重跑时优先用 `DUBBING_CACHE` 的真实音频时长判断。
+- 合并/压缩只改目标文本与字幕条数，不改视频、不切视频；`video_autorate` 仍关闭。
+- 详细原理、配置、标定与排错见 `audio-fit.md`。
 
 ## 目录
 
@@ -44,6 +57,10 @@
 | 后处理/QC | 可与下一片配音重叠 | ffmpeg/CPU |
 
 **不要**让 ASR 与 TTS 同时占用 GPU；12 GB 卡上容易 OOM。
+
+本机（RTX 5070 Ti Laptop）额外注意：GPU 高频会挤占 CPU 功耗，使 GPT 从 3.6s/句退化到 15–19s/句。
+`scripts/gpu_lock_task.cmd` 注册登录任务，把 GPU 上限锁到 1200MHz 后，CPU 恢复、TTS 稳定在 5–6s/句；
+详见 `configuration.md` 的“GPU 锁频任务”。
 
 ## 断点续跑
 
