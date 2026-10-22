@@ -18,16 +18,42 @@ IndexTTS2 **每句有固定开销**（中文实测约 `1.3s + 0.123s/汉字`）�
 - 长译文塞进短槽位，只能 2–3× 加速；
 - 逐句独立变速会让播放速度在 0.83–2.27× 之间跳。
 
-## 默认策略（B）
+## 默认策略 audio_native（声音优先）
+
+`prep` 先做语义重断句：
+
+- 翻译前合并源碎句（`resegment_srt.py`，源 74 → 45 左右）；
+- 翻译后按句子边界切显示字幕（22 字 × 2 行）；
+- `resegment_llm_check` 把整段字幕交给 DeepSeek 审校，输出 **TTS 语义单元**
+  （001 实测 49 条显示字幕 → 31 个 TTS 单元）。显示字幕保持短块，不会被合并拉长。
+
+`dub` 阶段：
+
+- `voice_autorate=false`、`max_audio_speed_rate=1.0`、`max_audio_slow_rate=1.0`：
+  TTS 音频完全原速，不再为槽位拉伸；
+- `video_autorate=true`：音频比槽位长时，按片段 PTS 轻微慢放视频；音频短时保留
+  自然静音；
+- 有 TTS 语义单元时关闭 `fit_merge`/`fit_condense`，避免二次改写音频；
+- `duration_tol_s`（默认 10s）允许视频变速带来的成品时长漂移。
+
+实测 001：音频加速 `False`、视频慢速 `True`，成品 216.2s（源 214.5s，+1.7s），
+显示字幕 49 条、2 行、QC PASS。
+
+## fit 兜底（无 TTS 语义单元时）
 
 处理发生在 `dub` 内部、说话人聚类之后、TTS 之前；**不改视频、不切视频**。
+DeepSeek 审校不可用（无 Key/网络失败）时，退回规则断句 + fit；以下为 fit 细节。
 
 ### 1. `fit_merge`：合并同一说话人的相邻短句
 
 - 条件：同一说话人（`cluster`/`single` 用 `ref_wav`，`line` 用 CAMPPlus 聚类键）、
   间隔 ≤`fit_gap_ms`（默认 500ms）、
-  合并后 ≤`fit_max_chars`（默认 36）个汉字，且 `simple_wrap` 仍为 ≤2 行。
+  合并后 ≤`fit_max_chars`（默认 44）个汉字，且两行显示（每行
+  `fit_wrap_width`，默认 22 个汉字）。
 - 优先合并最超速的句子（worst-first），避免紧邻的好句被先吃掉。
+- **语义半句优先**：如果前一句不以 `。！？.!?…` 结尾（以逗号、冒号或没有标点收尾），
+  且与后一句同说话人、间隔 ≤900ms，即使两边都不超速也合并。这类块通常是
+  ASR/翻译把一句完整的话切成了两段；不合并会让 TTS 在句中换气，听感断裂。
 - 合并后共用一次固定开销；时间轴取第一句开始到第二句结束，槽位自然变长。
 - 不同说话人、间隔大的停顿、`line_roles` 指定了逐行音色的行都不合并。
 
@@ -58,11 +84,11 @@ speaker clustering failed rc=1
 
 ### 3. 音频填缝（已有逻辑）
 
-- 配音短于槽位：**空档 ≤`dubb_natural_pause_ms`（默认 600ms）时保持原速**，
-  不为了填满而放慢；只有空档超过它，才最多放慢 `max_audio_slow_rate`（默认 1.05），
-  把空档压到 natural 附近。`dubb_min_pause_ms`（默认 200ms）是底线。
-  旧逻辑会把每条短句都放慢到只剩 200ms，听感整体拖沓。
-- 配音长于槽位：Rubberband 保音色加速，`max_audio_speed_rate`（默认 2.5）只是兜底。
+- audio_native 下音频完全原速，不做填缝/加速；音频短于槽位就保留自然静音。
+- 仅当关闭 `video_autorate`、退回音频对齐时才使用：空档 ≤`dubb_natural_pause_ms`
+  （默认 600ms）保持原速；超过才最多放慢 `max_audio_slow_rate`。`dubb_min_pause_ms`
+  （默认 200ms）是底线。
+- 配音长于槽位：`max_audio_speed_rate` 是兜底；audio_native 下为 1.0。
 - 第一句不再把片头 4–5 秒算进自己的槽位。
 
 ## 配置
@@ -75,7 +101,8 @@ speaker clustering failed rc=1
   "fit_condense": true,
   "fit_force": false,
   "fit_max_speed": 1.12,
-  "fit_max_chars": 36,
+  "fit_max_chars": 44,
+  "fit_wrap_width": 22,
   "fit_gap_ms": 500,
   "fit_pred_a": 1.30,
   "fit_pred_b": 0.123,
@@ -83,20 +110,26 @@ speaker clustering failed rc=1
   "clone_ref_mode": "line",
   "index_fast": false,
   "index_diffusion_steps": 25,
-  "max_audio_slow_rate": 1.05,
+  "resegment": true,
+  "resegment_llm_check": true,
+  "resegment_target_max_chars": 44,
+  "max_audio_speed_rate": 1.0,
+  "max_audio_slow_rate": 1.0,
   "dubb_min_pause_ms": 200,
   "dubb_natural_pause_ms": 600,
-  "voice_autorate": true,
-  "video_autorate": false
+  "voice_autorate": false,
+  "video_autorate": true,
+  "duration_tol_s": 10
 }
 ```
 
-这是默认的 **quality_merge** 预设：逐句参考保留情感、beam 3、扩散 25 步、
-只放慢 5%、自然停顿 600ms；比 beam1/15 的快速配置慢约 17%。
+这是默认的 **audio_native** 预设：TTS 原速、视频片段吸收长度差、DeepSeek 审校
+语义单元；`fit_*` 只在没有 DeepSeek 审校结果时兜底。比 beam1/15 的快速配置慢约 17%。
 
 环境变量：`VTV_FIT_MERGE`、`VTV_FIT_CONDENSE`、`VTV_FIT_FORCE`、
-`VTV_FIT_MAX_SPEED`、`VTV_FIT_MAX_CHARS`、`VTV_FIT_GAP_MS`、`VTV_FIT_PRED_A`、
-`VTV_FIT_PRED_B`、`VTV_FIT_CONDENSE_SPEED`、`VTV_GLOSSARY_FILE`、
+`VTV_FIT_MAX_SPEED`、`VTV_FIT_MAX_CHARS`、`VTV_FIT_WRAP_WIDTH`、
+`VTV_FIT_GAP_MS`、`VTV_FIT_PRED_A`、`VTV_FIT_PRED_B`、
+`VTV_FIT_CONDENSE_SPEED`、`VTV_GLOSSARY_FILE`、
 `VTV_ITT_SITE`（聚类用的 IndexTTS2 `site-packages`）。
 
 实现位置：`vendor/pyvideotrans/videotrans/task/_stage_dubbing.py` 的

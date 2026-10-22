@@ -94,15 +94,25 @@ python scripts/pipeline.py setup \
 - 替换 `vendor/pyvideotrans` 或 `vendor/index-tts2-cli` 后，重新跑 `setup`（依赖/模型已缓存则秒回）。
 - 本项目对 vendor 的补丁见 `references/quality.md`、`references/pipeline.md`、
   `references/audio-fit.md`；升级上游后需重新应用：
-  - `_rate.py` concat 强制 48k/2ch；音频-only 选择性放慢填缝（自然停顿 600ms、
-    放慢上限 1.05）、第一句不吞片头
+  - `_rate.py` concat 强制 48k/2ch；空档 ≤natural 时保持 TTS 原速（不再把
+    `audio_target` 默认设成整个槽位）；audio_native 下音频加速/放慢上限 1.0；
+    第一句不吞片头
+  - `_stage_align.py` 使用 `VTV_TTS_SRT` 时不要用 TTS 单元覆盖显示字幕
+  - `_stage_subtitle.py` `cjk_len` 默认 22（与 `fit_wrap_width`、QC 一致）
   - `_stage_dubbing.py` 按时间重叠配对、逐行缓存、每视频固定参考（`clone_fixed.wav`）
   - `_stage_dubbing.py` 配音单元拟合：`fit_merge`/`fit_condense`（同说话人合并、
     实际缓存时长判断、DeepSeek 压缩、术语保护、`thinking=disabled`）；
     `line` 模式额外用 CAMPPlus 聚类做同说话人合并键；聚类子进程需要
     `VTV_ITT_SITE`（IndexTTS2 venv 的 `site-packages`），否则 `rc=1`、0 合并
+  - `_stage_dubbing.py` 支持 `VTV_TTS_SRT`：TTS 用 DeepSeek 审校后的语义单元，
+    显示字幕保持短块，`_save_srt_target` 不覆盖显示 SRT
   - `_stage_dubbing.py` / `tts/_index.py` 重启 daemon 时直接调用
     `pythonw + scripts/indextts2.py stop --json`，不经过 `indextts2.cmd`
+  - `scripts/resegment_srt.py` 规则重断句；`scripts/resegment_check.py` DeepSeek
+    审校（只允许合并/轻微压缩，失败回退规则）；`pipeline.py` 在 `prep` 前后调用，
+    并生成 `<target>.tts.srt`
+  - `pipeline.py` 的 `post` 在 `video_autorate` 下按成品自身时长输出，
+    QC 用 `duration_tol_s`（默认 10s）允许变速带来的时长漂移
   - `scripts/trans_cli.py` 任务优先直接用 pyVideoTrans venv 的 `pythonw.exe`（fallback
     `uv run --no-sync`），并注入 `_winhide_site` 的 `PYTHONPATH`
   - `scripts/pipeline.py` / `trans_cli.py` 入口 `pythonw`、base pythonw 选择、

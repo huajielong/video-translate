@@ -46,6 +46,8 @@ SHIM = SCRIPTS / "gradio_shim.py"
 QC = SCRIPTS / "qc.py"
 POLISH = SCRIPTS / "polish_srt.py"
 REPORT = SCRIPTS / "make_report.py"
+SEGMENT = SCRIPTS / "resegment_srt.py"
+SEGMENT_CHECK = SCRIPTS / "resegment_check.py"
 IS_WINDOWS = platform.system().lower() == "windows"
 
 # pythonw.exe has no console; send progress and tracebacks to a file.
@@ -85,10 +87,17 @@ DEFAULTS = {
     "speaker_merge_sim": 0.80,
     "speaker_self_consistency": 0.55,
     "mt_workers": 4,
-    "voice_autorate": True,
-    # video_autorate 会重建视频；当前上游实现会丢掉片头/片尾，先默认关闭，
-    # 修好 head/tail 与时长容差后再开启。
-    "video_autorate": False,
+    # 声音优先：TTS 原速，不再为了槽位拉伸音频；画面片段按音频长度做 PTS 微调。
+    "voice_autorate": False,
+    "video_autorate": True,
+    # 翻译前合并源碎句、翻译后按句子边界重切，避免完整句被字幕块切断。
+    "resegment": True,
+    "resegment_max_gap_ms": 900,
+    "resegment_source_max_chars": 140,
+    "resegment_target_max_chars": 44,
+    # DeepSeek audits the rule-based sentence boundaries; it only proposes
+    # TTS groups, while display cues stay at the rule-based boundaries.
+    "resegment_llm_check": True,
     # 配音单元拟合：合并同说话人的相邻短句，再压缩仍超长的句子。
     # 预测模型按 IndexTTS2 实测拟合：audio ≈ 1.30s + 0.123s/汉字。
     "fit_merge": True,
@@ -96,17 +105,20 @@ DEFAULTS = {
     # 仅 IndexTTS2 自动启用；其他后端标定后可用 fit_force 强制
     "fit_force": False,
     "fit_max_speed": 1.12,
-    "fit_max_chars": 36,
+    "fit_max_chars": 44,
+    "fit_wrap_width": 22,
     "fit_gap_ms": 500,
     "fit_pred_a": 1.30,
     "fit_pred_b": 0.123,
     "fit_condense_speed": 1.25,
-    "max_audio_speed_rate": 2.5,
-    "max_audio_slow_rate": 1.05,
+    "max_audio_speed_rate": 1.0,
+    "max_audio_slow_rate": 1.0,
     "max_video_pts_rate": 1.5,
     "dubb_min_pause_ms": 200,
     # 自然短停顿；只有超过它的空档才放慢填缝，避免每条短句都被拉慢
     "dubb_natural_pause_ms": 600,
+    # video_autorate 会让总时长随音频变化；QC 允许的时长漂移（秒）
+    "duration_tol_s": 10.0,
     "loudness": -18.0,
     "final_suffix": "",
     "glossary": "assets/glossary.txt",
@@ -198,7 +210,8 @@ def env(cfg: dict) -> dict:
     e["VTV_FIT_CONDENSE"] = "1" if cfg.get("fit_condense", True) else "0"
     e["VTV_FIT_FORCE"] = "1" if cfg.get("fit_force", False) else "0"
     e["VTV_FIT_MAX_SPEED"] = str(cfg.get("fit_max_speed", 1.12))
-    e["VTV_FIT_MAX_CHARS"] = str(cfg.get("fit_max_chars", 36))
+    e["VTV_FIT_MAX_CHARS"] = str(cfg.get("fit_max_chars", 44))
+    e["VTV_FIT_WRAP_WIDTH"] = str(cfg.get("fit_wrap_width", 22))
     e["VTV_FIT_GAP_MS"] = str(cfg.get("fit_gap_ms", 500))
     e["VTV_FIT_PRED_A"] = str(cfg.get("fit_pred_a", 1.30))
     e["VTV_FIT_PRED_B"] = str(cfg.get("fit_pred_b", 0.123))
@@ -220,6 +233,14 @@ def env(cfg: dict) -> dict:
         pass
     e.setdefault("PYTHONUTF8", "1")
     e.setdefault("PYTHONIOENCODING", "utf-8")
+    if cfg.get("video_autorate"):
+        e["VTV_DURATION_TOL_S"] = str(cfg.get("duration_tol_s", 10.0))
+    if cfg.get("_tts_srt"):
+        # TTS units are already complete sentences from the DeepSeek audit;
+        # don't merge/condense them again (subtitles stay rule-based).
+        e["VTV_TTS_SRT"] = str(cfg["_tts_srt"])
+        e["VTV_FIT_MERGE"] = "0"
+        e["VTV_FIT_CONDENSE"] = "0"
     if IS_WINDOWS:
         # Covers Python grandchildren we do not launch ourselves (the IndexTTS2
         # API's ffmpeg calls, uv -> cli.py).  See _winhide_site/sitecustomize.py.
@@ -713,16 +734,86 @@ def import_sidecar(side: Path, dest: Path, cfg: dict) -> bool:
     return True
 
 
+def resegment_file(cfg: dict, inp: Path, out: Path, max_chars: int,
+                   lang: str, log: Path) -> bool:
+    if not cfg.get("resegment", True):
+        return False
+    cmd = [sys.executable, str(SEGMENT), "--input", str(inp),
+           "--output", str(out), "--max-chars", str(max(8, max_chars)),
+           "--max-gap", str(max(0, int(cfg.get("resegment_max_gap_ms", 900)))),
+           "--source-lang", str(lang)]
+    return run(cmd, cfg, log) == 0
+
+
+def resegment_source(cfg: dict, stem: str, p: dict, fresh: bool = False) -> None:
+    """Merge ASR/VTT fragments before translation (original kept as en.orig.srt)."""
+    en = p["prep"] / "en.srt"
+    orig = p["prep"] / "en.orig.srt"
+    if not en.exists() or not cfg.get("resegment", True):
+        return
+    if fresh:
+        shutil.copy2(en, orig)
+    elif orig.exists():
+        return
+    else:
+        shutil.copy2(en, orig)
+    tmp = p["prep"] / "en.reseg.tmp.srt"
+    if resegment_file(cfg, orig, tmp, int(cfg.get("resegment_source_max_chars", 140)),
+                      cfg["source_lang"], p["log"]):
+        tmp.replace(en)
+        print(f"[prep] {stem}: resegment source -> {en}")
+    else:
+        tmp.unlink(missing_ok=True)
+        print(f"[prep] {stem}: source resegment failed; keeping original cues")
+
+
+def resegment_target(cfg: dict, stem: str, p: dict, target: Path) -> None:
+    """Split/merge translated cues at sentence boundaries.
+
+    The rule pass fixes display cues.  DeepSeek then audits the whole transcript
+    and writes merged *TTS units* (possibly longer than one display cue); the
+    dubbing stage uses those while the burned/archived subtitles keep the
+    display cue boundaries.
+    """
+    if not cfg.get("resegment", True) or not target.exists():
+        return
+    max_chars = int(cfg.get("resegment_target_max_chars", 44))
+    tmp = p["prep"] / f"{target.stem}.reseg.tmp.srt"
+    if resegment_file(cfg, target, tmp, max_chars, cfg["target_lang"], p["log"]):
+        tmp.replace(target)
+        print(f"[prep] {stem}: resegment target -> {target}")
+    else:
+        tmp.unlink(missing_ok=True)
+
+    if not cfg.get("resegment_llm_check", True):
+        return
+    checked = p["prep"] / f"{target.stem}.llm.tmp.srt"
+    tts_tmp = p["prep"] / f"{target.stem}.tts.tmp.srt"
+    cmd = [sys.executable, str(SEGMENT_CHECK), "--input", str(target),
+           "--output", str(checked), "--tts-output", str(tts_tmp),
+           "--max-chars", str(max_chars), "--lang", cfg["target_lang"]]
+    rc = run(cmd, cfg, p["log"])
+    if rc == 0 and checked.exists():
+        checked.replace(target)
+    else:
+        checked.unlink(missing_ok=True)
+    if tts_tmp.exists():
+        tts_tmp.replace(p["prep"] / f"{target.stem}.tts.srt")
+        print(f"[prep] {stem}: DeepSeek TTS groups -> {target.stem}.tts.srt")
+
+
 def asr_one(cfg: dict, stem: str, src: Path, force: bool = False) -> bool:
     p = paths(cfg, stem)
     en = p["prep"] / "en.srt"
     if en.exists() and not force:
+        resegment_source(cfg, stem, p)
         print(f"[prep] {stem}: ASR cached")
         return True
     side = find_sidecar(src) if cfg.get("sidecar_subs", True) else None
     if side:
         if import_sidecar(side, en, cfg):
             save_state(stem, asr=True, asr_source="sidecar")
+            resegment_source(cfg, stem, p, fresh=True)
             print(f"[prep] {stem}: sidecar {side.name} -> {en}")
             return True
         print(f"[prep] {stem}: sidecar import failed; falling back to ASR")
@@ -738,6 +829,7 @@ def asr_one(cfg: dict, stem: str, src: Path, force: bool = False) -> bool:
         print(f"[prep] {stem}: ASR failed rc={rc}")
         return False
     shutil.copy2(produced, en)
+    resegment_source(cfg, stem, p, fresh=True)
     save_state(stem, asr=True)
     print(f"[prep] {stem}: ASR -> {en}")
     return True
@@ -767,6 +859,7 @@ def mt_one(cfg: dict, stem: str, force: bool = False) -> bool:
         print(f"[prep] {stem}: translation failed rc={rc}")
         return False
     shutil.copy2(produced, target)
+    resegment_target(cfg, stem, p, target)
     save_state(stem, mt=True)
     print(f"[prep] {stem}: MT -> {target}")
     return True
@@ -797,6 +890,24 @@ def dub_one(cfg: dict, stem: str, src: Path, force: bool = False) -> bool:
     p["dub"].mkdir(parents=True, exist_ok=True)
     shutil.copy2(en, p["dub"] / f"{cfg['source_lang']}.srt")
     shutil.copy2(target, p["dub"] / f"{cfg['target_lang']}.srt")
+    run_cfg = cfg
+    tts_srt = p["prep"] / f"{target.stem}.tts.srt"
+    if tts_srt.exists():
+        try:
+            n_tts = sum(1 for x in tts_srt.read_text(encoding="utf-8-sig",
+                                                   errors="replace").splitlines()
+                        if "-->" in x)
+            n_disp = sum(1 for x in target.read_text(encoding="utf-8-sig",
+                                                    errors="replace").splitlines()
+                         if "-->" in x)
+        except Exception:
+            n_tts = n_disp = 0
+        if 0 < n_tts < n_disp:
+            dub_tts = p["dub"] / f"{cfg['target_lang']}.tts.srt"
+            shutil.copy2(tts_srt, dub_tts)
+            run_cfg = dict(cfg)
+            run_cfg["_tts_srt"] = str(dub_tts)
+            print(f"[dub] {stem}: TTS units {n_tts} (display cues {n_disp})")
     subtitle_type = {"none": 0, "hard": 1, "soft": 2, "dual-hard": 3,
                      "dual-soft": 4}.get(cfg.get("subtitle_mode", "hard"), 1)
     extra = []
@@ -813,7 +924,7 @@ def dub_one(cfg: dict, stem: str, src: Path, force: bool = False) -> bool:
         "--outdir", str(p["dub"]), "--overwrite", "--no-clear-cache")
     if extra:
         cmd.append("--extra-args=" + " ".join(extra))
-    rc = run(cmd, cfg, p["log"])
+    rc = run(cmd, run_cfg, p["log"])
     produced = p["dub"] / f"{stem}.mp4"
     if rc != 0 or not produced.exists():
         print(f"[dub] {stem}: failed rc={rc}")
@@ -863,6 +974,7 @@ def post_one(cfg: dict, stem: str) -> bool:
     tmp = p["final"].with_suffix(".tmp.mp4")
     source = Path(cfg["src_dir"]) / f"{stem}.mp4"
     source_dur = media_duration(source, cfg) if source.exists() else 0.0
+    dub_dur = media_duration(src_mp4, cfg)
     target = f"I={cfg.get('loudness', -18)}:TP=-1.5:LRA=11"
     measured = measure_loudnorm(src_mp4, cfg, target)
     af = f"loudnorm={target}"
@@ -876,11 +988,12 @@ def post_one(cfg: dict, stem: str) -> bool:
     cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(src_mp4),
            "-c:v", "copy", "-af", af,
            "-ar", "48000", "-c:a", "aac", "-b:a", "192k"]
-    # The dubbed audio can overrun the last slot when a line exceeds
-    # max_audio_speed_rate; trim the output to the source duration so the
-    # final video does not grow (QC duration diff / A/V drift).
-    if source_dur > 0:
-        cmd += ["-t", f"{source_dur:.3f}"]
+    # Normal mode trims audio overrun at the source duration.  With
+    # video_autorate, the dubbed video may legitimately be longer/shorter;
+    # trim to its own duration instead so the tail is not cut off.
+    trim = dub_dur if cfg.get("video_autorate") and dub_dur > 0 else source_dur
+    if trim > 0:
+        cmd += ["-t", f"{trim:.3f}"]
     cmd.append(str(tmp))
     rc = run(cmd, cfg, p["log"])
     if rc != 0 or not tmp.exists():

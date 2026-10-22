@@ -66,8 +66,10 @@ IndexTTS2 服务本身的 API/音色/情感文档在 `vendor/index-tts2-cli/refe
 `index` 克隆后端、硬字幕、`en → zh-cn`、`mt_workers=4`、AAC 48 kHz、-18 LUFS、
 术语表 `assets/glossary.txt`。语言不写死：`--source` / `--target` / `--glossary` 均可配置。
 视频旁有 `.en-us.vtt` / `.en.vtt` / `.en.srt` 时直接导入，跳过 ASR（`sidecar_subs=true`）。
-默认 **quality_merge**：`clone_ref_mode=line` + beam 3 + 扩散 25 + 放慢 1.05 +
-自然停顿 600ms + `fit_merge`/`fit_condense`；细节与标定见 `references/audio-fit.md`。
+默认 **audio_native（声音优先）**：翻译前后 `resegment` 重断句，DeepSeek 审校后把
+完整句作为 TTS 语义单元（显示字幕仍是短块）；`voice_autorate=false` 保持 TTS 原速，
+`video_autorate=true` 用视频片段 PTS 吸收长度差。`fit_merge`/`fit_condense` 只在没有
+TTS 语义单元时兜底。细节见 `references/audio-fit.md`，配置见 `configuration.md`。
 Windows 上 API/shim/daemon 统一用 base `pythonw`，venv 的 `site-packages` 走
-`PYTHONPATH`；`fit_merge` 依赖 CAMPPlus 聚类，聚类失败会 0 合并、块数暴增。
+`PYTHONPATH`；聚类失败会让 `fit_merge` 0 合并、块数暴增。
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -19,12 +20,14 @@ from _winhide import hide_console_windows  # noqa: E402
 
 hide_console_windows()
 
-DURATION_TOL_S = 1.0
+DURATION_TOL_S = float(os.environ.get("VTV_DURATION_TOL_S", "1.0"))
 LOUDNESS_TARGET = -18.0
 LOUDNESS_TOL = 1.0
 TRUE_PEAK_MAX = -1.0
 MAX_LINES = 2
-MAX_CJK_PER_LINE = 18
+# Must match fit_wrap_width (22): merged semantic sentences can be 44 chars,
+# displayed as 2 lines of 22.  The old 18 came from the pre-merge era.
+MAX_CJK_PER_LINE = 22
 GLOSSARY_MIN_RECALL = 0.95
 
 
@@ -126,7 +129,8 @@ def check_subtitles(zh_srt: str, en_srt: str | None, glossary: str | None) -> di
     long_lines = 0
     for i, b in enumerate(zh, 1):
         lines = b["text"].split("\n")
-        estimated = sum(estimate_lines(ln) for ln in lines) if lines else 0
+        estimated = (sum(estimate_lines(ln, MAX_CJK_PER_LINE) for ln in lines)
+                     if lines else 0)
         display_lines = max(display_lines, estimated)
         if estimated > MAX_LINES:
             issues.append(f"block {i}: ~{estimated} display lines")

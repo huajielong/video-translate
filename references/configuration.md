@@ -43,18 +43,25 @@
 | `index_high_priority` | `true` | `serve` 把 API/shim/daemon 提到 High 优先级 |
 | `index_diffusion_steps` | `25` | s2mel 扩散步数；15 步约省 0.4–0.5s/句，10 步收益饱和，音质需试听 |
 | `mt_workers` | `4` | 翻译并发（纯网络等待） |
-| `voice_autorate` | `true` | 传 `--voice_autorate`，用音频变速对齐字幕 |
-| `video_autorate` | `false` | 传 `--video_autorate`，用视频慢速分担；**当前上游实现会丢片头/片尾，修好前不要开** |
-| `max_video_pts_rate` | `1.5` | 视频慢速封顶；配合 `video_autorate` |
-| `max_audio_speed_rate` | `30` | 配音长于字幕区间时最大加速倍率；越小越自然，但可能破坏同步 |
-| `max_audio_slow_rate` | `1.05` | 配音短于区间时允许的最大放慢倍率；默认只放慢 5%，避免整体拖沓；`1.0` 关闭 |
+| `voice_autorate` | `false` | `true` 时用 Rubberband 改变音频语速；声音优先默认关闭，TTS 原速 |
+| `video_autorate` | `true` | 用视频片段 PTS 吸收音频长度差，保持音频原速；默认开启 |
+| `max_video_pts_rate` | `1.5` | 视频慢速封顶；配合 `video_autorate`，避免极端慢动作 |
+| `max_audio_speed_rate` | `1.0` | 音频加速上限；音频原速默认 1.0 |
+| `max_audio_slow_rate` | `1.0` | 音频放慢上限；音频原速默认 1.0 |
+| `resegment` | `true` | 翻译前合并源碎句、翻译后按句子边界重切 |
+| `resegment_max_gap_ms` | `900` | 允许合并的相邻字幕间隔 |
+| `resegment_source_max_chars` | `140` | 源语言合并/切分上限（英文按字符） |
+| `resegment_target_max_chars` | `44` | 目标字幕显示上限（22 字 × 2 行） |
+| `resegment_llm_check` | `true` | 规则断句后由 DeepSeek 审校，生成 TTS 语义单元；显示字幕不被拉长 |
+| `duration_tol_s` | `10` | `video_autorate` 下允许的成品/源片时长差（秒） |
 | `dubb_min_pause_ms` | `200` | 每句结束至少保留的停顿毫秒数；放慢填缝不会低于该停顿 |
 | `dubb_natural_pause_ms` | `600` | 自然短停顿；空档不超过它时保持原速，超过才放慢填缝 |
 | `fit_merge` | `true` | 合并同说话人、时间相邻的短句，减少 IndexTTS2 固定开销导致的 2–3× 加速 |
 | `fit_condense` | `true` | 合并后仍超速的句子用 DeepSeek 压缩改写；需要 DeepSeek Key |
 | `fit_force` | `false` | `fit_*` 只对 IndexTTS2 自动启用；其他后端标定后设 `true` 强制 |
 | `fit_max_speed` | `1.12` | 目标最大“配音/槽位”时长比，合并与压缩共用 |
-| `fit_max_chars` | `36` | 合并后单条字幕最多汉字数，约两行显示 |
+| `fit_max_chars` | `44` | 合并后单条字幕最多汉字数，约两行显示；语义半句合并也受此限制 |
+| `fit_wrap_width` | `22` | 合并后每行最多汉字数；`22×2=44`，配合 `fit_max_chars` |
 | `fit_gap_ms` | `500` | 相邻句间隔超过该值不合并，保留原本的说话停顿 |
 | `fit_pred_a` / `fit_pred_b` | `1.30` / `0.123` | IndexTTS2 时长预测 `秒 ≈ a + b×汉字数`；换后端/音色需重标定 |
 | `fit_condense_speed` | `1.25` | 预测/实际时长比超过该值才触发压缩；避免过度改写 |
@@ -109,6 +116,7 @@
 | `VTV_FIT_MERGE` / `VTV_FIT_CONDENSE` | `1`/`0`，对应 `fit_merge` / `fit_condense` |
 | `VTV_FIT_FORCE` | `1` 时非 IndexTTS2 也启用 fit（需先标定预测模型） |
 | `VTV_FIT_MAX_SPEED` / `VTV_FIT_MAX_CHARS` | 对应 `fit_max_speed` / `fit_max_chars` |
+| `VTV_FIT_WRAP_WIDTH` | 对应 `fit_wrap_width` |
 | `VTV_FIT_GAP_MS` | 对应 `fit_gap_ms` |
 | `VTV_FIT_PRED_A` / `VTV_FIT_PRED_B` | 对应 `fit_pred_a` / `fit_pred_b` |
 | `VTV_FIT_CONDENSE_SPEED` | 对应 `fit_condense_speed` |

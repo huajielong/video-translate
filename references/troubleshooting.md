@@ -51,19 +51,31 @@ ffmpeg 转码。
 先读 `performance.md`：GPU 锁频、CPU 性能、daemon 优先级/亲和性、probe/tts_stability。
 GPU 已锁频且 CPU 稳定但 GPT 仍随句数上升时，才考虑 `index_restart_every`。
 
+## 字幕被切成两段 / 断句不完整
+
+- `prep` 自动跑 `resegment_srt.py`：源 74 → 45 左右，目标显示字幕按 22 字×2 行切；
+- `resegment_llm_check=true` 时，DeepSeek 会审校整段并生成 `<target>.tts.srt`
+  （001 实测 49 条显示字幕 → 31 个 TTS 语义单元）。日志出现
+  `DeepSeek TTS groups -> ...` 才表示审校生效；
+- 若日志显示 `DeepSeek unavailable` 或 `invalid group list`，会回退规则断句；
+  检查 DeepSeek Key/网络，或临时设 `resegment_llm_check=false`；
+- 显示字幕仍按短块烧录，TTS 使用合并后的完整句；两者块数不同是正常的。
+
 ## 句间静音太长 / 一段话和下一段间隔太久
 
 现象：配音本身正常，但每句之间停顿很长，听起来卡顿、不连贯；音画时间轴没变。
 原因：对齐阶段把每条字幕的区间设为“本句开始到下一句开始”，若 TTS 音频短于该区间，
 旧逻辑用数字静音补满，TTS 越短空档越大。002 的 232 句里曾累计约 289 秒静音。
-处理（本版本已改）：
-- 空档 ≤`dubb_natural_pause_ms`（默认 600ms）时保持原速；只有超过它才允许最多
-  放慢 `max_audio_slow_rate`（默认 1.05）去填，填到 natural 附近；
-- `dubb_min_pause_ms`（默认 200ms）是底线；
-- 第一句不再把开头 4–5 秒算进自己的区间；
-- 这是 quality_merge 默认：优先自然语速，避免每条短句都被拉慢；
-- 想更紧凑：把 `dubb_natural_pause_ms` 降到 400–500、`max_audio_slow_rate` 调到 1.1；
-- 想更自然：把 `dubb_natural_pause_ms` 调到 800、`max_audio_slow_rate` 调到 1.0；
+处理（本版本默认 audio_native）：
+- `voice_autorate=false`、`max_audio_slow_rate=1.0`：TTS 保持原速，音频短于槽位时
+  就保留自然静音，不再为了填满而拉慢；
+- 音频长于槽位时由 `video_autorate` 慢放视频片段吸收；只有关闭 `video_autorate`
+  时才退回音频填缝（空档 ≤`dubb_natural_pause_ms` 默认 600ms 保持原速，超过才最多
+  放慢 `max_audio_slow_rate`）；
+- `dubb_min_pause_ms`（默认 200ms）是音频填缝的底线；
+- 如果段落间仍有长停顿，那是源片本身的停顿；不要用放慢音频去填，优先用
+  `resegment`/TTS 语义单元保证句子内部连贯；
+- 想切碎/更紧凑：调小 `resegment_max_gap_ms` 或关闭 `resegment_llm_check`；
 - 修改后重跑同一命令即可，逐句 TTS 缓存会复用。
 
 ## 音频忽快忽慢 / 短句被加速 2–3 倍
@@ -74,11 +86,19 @@ GPU 已锁频且 CPU 稳定但 GPT 仍随句数上升时，才考虑 `index_rest
 原因：IndexTTS2 每句有约 **1.3 秒固定开销**，5 个汉字也要约 1.6 秒音频；槽位不是按
 “这句话需要多久”给的，而是按原字幕的下一句开始时间给的。单纯压缩文字救不了极短槽位。
 
+audio_native 下如果仍看到音频变速：
+
+- 先看对齐日志 `开始语音视频字幕对齐处理：音频加速=False, 视频慢速=True`；
+  如果 `音频加速=True`，说明仍传了 `--voice_autorate`，检查 `config.json`；
+- `_rate.py` 旧逻辑把 `audio_target` 默认设为整个槽位，导致空档 ≤natural 也被
+  Rubberband 拉慢（日志倍率 0.83）；本版本已改为默认 `dubb_duration`（原速）。
+
 处理（本版本默认开启）：
 
 - `fit_merge`：在说话人聚类之后，把同一说话人、间隔 ≤`fit_gap_ms`（默认 500ms）的
-  相邻短句合并成一个配音单元，共享固定开销；合并后每条最多 `fit_max_chars`（默认 36）
-  个汉字，仍保持两行显示。
+  相邻短句合并成一个配音单元，共享固定开销；合并后每条最多 `fit_max_chars`（默认 44）
+  个汉字，两行显示。若前一句没有句末标点（被 ASR/翻译切断），间隔 ≤900ms 时
+  即使不超速也会合并，避免句中断裂。
 - `fit_condense`：合并后实际/预测仍超过 `fit_condense_speed`（默认 1.25×）的句子，用
   DeepSeek 压缩到 `fit_max_speed`（默认 1.12×）对应的字数；术语表里的词不会被删。
 - 002 实测：232 句合并为 199 句，最大加速 **2.75× → 1.44×**，>1.5× 的句子 **21 → 0**，

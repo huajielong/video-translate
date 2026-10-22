@@ -3,7 +3,11 @@
 ## 字幕
 
 - 翻译后把超长块按标点拆成 ≤28 字（`_split_long_subs`），时间按字数比例分配。
-- 显示时按 15 字/行平衡断成两行；标点优先，拉丁词（PagedAttention、vLLM、token）保持原子。
+- 显示时按 22 字/行平衡断成两行（与 `fit_wrap_width`、QC 的 22 一致）；标点优先，
+  拉丁词（PagedAttention、vLLM、token）保持原子。可用 `params.json` 的 `cjk_len`
+  调回 18/15，但需同时调小 `fit_wrap_width`、`fit_max_chars`。
+- `prep` 的 DeepSeek 审校会把完整句合并成 **TTS 语义单元**（可跨多条显示字幕）；
+  烧录/外挂字幕仍使用短显示块，两者不必一一对应。
 - 双语/软字幕：`--subtitle soft`（`--subtitle-type 2`）可让视频流无损复制；不要把同名 SRT 放在视频旁。
 - 硬字幕（默认）需要一次 NVENC 重编码；软字幕适合可开关字幕的播放器。
 
