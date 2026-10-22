@@ -59,9 +59,7 @@
 
 **不要**让 ASR 与 TTS 同时占用 GPU；12 GB 卡上容易 OOM。
 
-本机（RTX 5070 Ti Laptop）额外注意：GPU 高频会挤占 CPU 功耗，使 GPT 从 3.6s/句退化到 15–19s/句。
-`scripts/gpu_lock_task.cmd` 注册登录任务，把 GPU 上限锁到 1200MHz 后，CPU 恢复、TTS 稳定在 5–6s/句；
-详见 `configuration.md` 的“GPU 锁频任务”。
+GPU 高频/CPU 降频/电池优化见 `performance.md`。
 
 ## 断点续跑
 

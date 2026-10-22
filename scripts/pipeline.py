@@ -39,7 +39,6 @@ STATE = RUNTIME / "state"
 WRAPPER = SCRIPTS / "trans_cli.py"
 SHIM = SCRIPTS / "gradio_shim.py"
 QC = SCRIPTS / "qc.py"
-AB = SCRIPTS / "ab.py"
 POLISH = SCRIPTS / "polish_srt.py"
 REPORT = SCRIPTS / "make_report.py"
 IS_WINDOWS = platform.system().lower() == "windows"
@@ -915,7 +914,7 @@ def main() -> int:
     p.add_argument("--stop", action="store_true")
     p.set_defaults(func=cmd_serve)
 
-    for name in ("prep", "dub", "post", "run", "status", "ab", "polish", "qc", "report"):
+    for name in ("prep", "dub", "post", "run", "status", "polish", "qc", "report"):
         p = sub.add_parser(name)
         p.add_argument("--src", default="", help="source directory of mp4 files")
         p.add_argument("--out", default="", help="output directory")
@@ -933,9 +932,6 @@ def main() -> int:
         p.add_argument("--zh", default="")
         p.add_argument("--en", default="")
         p.add_argument("--glossary", default="")
-        p.add_argument("--stem", default="")
-        p.add_argument("--mode", default="")
-        p.add_argument("--blocks", type=int, default=30)
         p.add_argument("--logs", default="")
         p.add_argument("--json-out", default="")
         p.add_argument("--allow-battery", action="store_true")
@@ -1004,12 +1000,6 @@ def main() -> int:
         if p.stderr:
             print(p.stderr, file=sys.stderr)
         return p.returncode
-    if args.command == "ab":
-        ab_py = pvt_python(cfg) if pvt_python(cfg).exists() else Path(sys.executable)
-        return run([str(ab_py), str(AB), "--stem", args.stem, "--mode", args.mode,
-                    "--blocks", str(args.blocks), "--src", cfg["src_dir"],
-                    "--out", str(Path(cfg["out_dir"]) / "_ab"),
-                    "--index-api", cfg["index_api"]], cfg, LOGS / "ab.log")
     if args.command == "polish":
         return run([sys.executable, str(POLISH), "--srt", args.zh or args.video,
                     "--glossary", args.glossary or cfg["glossary"],

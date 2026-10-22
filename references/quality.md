@@ -48,13 +48,7 @@
 | 术语命中 | ≥95%（允许保留英文术语） |
 | ASR 回读 | 抽检 CER ≤10% |
 
-## A/B 结论（本机 RTX 5070 Ti Laptop 12 GB）
+## 后端选择
 
-| 后端 | RTF | 显存 | 结论 |
-|---|---:|---:|---|
-| IndexTTS2 (beam 3) | 2.5–3.4（fresh） | ~7.6 GB | **生产默认** |
-| IndexTTS2 (beam 1) | ~10–20% 更快 | ~7.6 GB | 质量略降 |
-| Qwen3-TTS 0.6B (eager) | 4.7–4.9 | ~3.4 GB | 不达速度门禁 |
-| Qwen3-TTS 0.6B (SDPA+bf16) | 3.7 | ~3.4 GB | 仍慢于 Index |
-
-Qwen 的瓶颈是缺少 flash-attn 与 sm_120 上的手动 attention；换有 flash-attn 的环境后可重测。
+默认 IndexTTS2（质量优先，beam 3 / 扩散 25）；`qwen3local` / `f5` 是可选后端，
+本机实测更慢，换后端前先按 `audio-fit.md` 重新标定并试听。

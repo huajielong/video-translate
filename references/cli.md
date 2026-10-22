@@ -15,7 +15,6 @@
 | `run` | `prep → dub → post` | `--src` `--out` | 单条失败不中断批次，最后返回 1 |
 | `status` | 每个视频的阶段状态 | `--src` `--out` | 输出 `asr/mt/dub/final/qc` 0/1 |
 | `qc` | 单文件 QC | `--video` `--zh` | `--source-video` 默认同 `--video` |
-| `ab` | IndexTTS2 vs Qwen3-TTS 基准 | `--stem` `--mode` | 结果写到 `<out>/_ab/` |
 | `polish` | 翻译后轻量审校（只改文本） | `--zh`（或 `--video`） | 输出默认 `<输入>.polished.srt` |
 | `report` | 汇总 `.runtime/logs/*.qc.json` | `--out`（或配置） | 输出 `<out>/QC_SUMMARY.md` |
 | `tts_stability` | 逐句 TTS 稳定性基准（`scripts/tts_stability.py`） | `--stem` `--src` `--out` | 直连 `/v1/tts`，采样 CPU/GPU/probe，输出到 `.runtime/stability/` |
@@ -23,11 +22,11 @@
 
 ## 共享参数
 
-以下参数由 `prep/dub/post/run/status/qc/ab/polish/report` 共同接受，但只有相关命令会使用：
+以下参数由 `prep/dub/post/run/status/qc/polish/report` 共同接受，但只有相关命令会使用：
 
 | 参数 | 适用命令 | 说明 |
 |---|---|---|
-| `--src DIR` | prep/dub/post/run/status/ab/report | 源视频目录；`ab` 从配置读取 |
+| `--src DIR` | prep/dub/post/run/status/report | 源视频目录 |
 | `--out DIR` | 同上 | 成品目录；`report` 用它决定输出位置 |
 | `--work DIR` | prep/dub/post/run | 中间目录，默认 `<out>/_work` |
 | `--videos LIST` | prep/dub/post/run/status | `all`（默认）或逗号分隔的 stem/前缀 |
@@ -43,9 +42,6 @@
 | `--zh FILE` / `--en FILE` | qc/polish | 目标/源字幕 |
 | `--glossary FILE` | qc/polish | 覆盖配置里的术语表 |
 | `--json-out FILE` | qc/polish | qc：QC JSON 路径；polish：审校后的 SRT 路径 |
-| `--stem NAME` | ab | 源视频 stem |
-| `--mode MODE` | ab | `index` / `qwenx` / `qweni` 等，见 `scripts/ab.py --help` |
-| `--blocks N` | ab | 参与基准的字幕块数，默认 30 |
 | `--logs DIR` | report | QC JSON 所在目录，默认技能内 `.runtime/logs/` |
 
 `--src` / `--out` 未传时读 `config.json` 的 `src_dir` / `out_dir`；两者都没有会直接报错。

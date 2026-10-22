@@ -119,26 +119,10 @@
 | `TRANS_ASR_MODEL` | 覆盖 `trans_cli.py` 的默认 ASR 模型 |
 | `HTTPS_PROXY` / `--proxy` | 依赖下载与模型下载的代理 |
 
-## GPU 锁频任务（本机实测）
+## GPU 锁频 / 电池 / TTS 变慢
 
-本机（RTX 5070 Ti Laptop + i7-14650HX）上，GPU 跑到 ~2700MHz 时会把 CPU 挤到 22%，
-GPT 从 3.6s/句退化到 15–19s/句；把 GPU 上限锁到 1200MHz 后 CPU 回到 ~175%，
-GPT 3.6s/句、总耗时 5.3–5.9s/句，100 句连续无退化。
-
-注册登录自动锁频（需要一次管理员权限）：
-
-```bat
-scripts\gpu_lock_task.cmd
-```
-
-它会创建计划任务 `video-translate-gpu-clock`，登录时执行
-`nvidia-smi -lgc 300,1200`。撤销并恢复默认：
-
-```bat
-scripts\gpu_lock_task.cmd remove
-```
-
-锁频期间游戏/3D 渲染性能会受限；不跑 TTS 时可随时 `nvidia-smi -rgc` 恢复。
+见 `performance.md`。`gpu_lock_clock` 非 0 时由管理员权限的 `serve` 锁频；
+普通用户用 `scripts\gpu_lock_task.cmd` 注册登录任务。
 
 ## 常见改动
 

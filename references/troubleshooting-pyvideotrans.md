@@ -34,27 +34,6 @@ Windows 版约 1.5 GB，只在需要本地翻译渠道时用 `--with-ollama`。�
 **Windows venv 不能直接拷贝**
 venv 内含绝对路径。换机器/换目录时不要复制 `.venv`，重新运行 `setup` 更可靠。
 
-## 布局迁移（1.2 → 1.3）
-
-**升级后数据在哪里**
-1.3 起源码和运行状态都在技能目录内。首次运行 `setup` 会把旧 `runtime/pyvideotrans` 的 `models`、`logs`、`params.json` 和旧 `tools/` 迁移到技能目录，并用 uv 缓存重建 `.venv`；只有 `uv sync` 成功后才删除旧内容。
-
-**旧目录没有被迁移**
-- 自动迁移只在旧包根存在 `trans.cmd` / `trans` 启动器时生效。全局安装（`~/.claude/skills/...`）下推算出的 `~/runtime/pyvideotrans` 可能是无关目录，脚本会忽略并打印 note。
-- 显式迁移：`setup --migrate-from <旧包根或旧 pyvideotrans 目录>`。
-
-**清理被推迟**
-`--no-sync`、`uv sync` 失败或新 `.venv` 不存在时不会删除旧 `.venv`，日志会提示 "legacy cleanup deferred"。
-
-**文件被占用**
-Windows 下旧 `.venv` / 日志可能被运行中的进程锁定。关闭 trans / uv / Ollama 后重跑 `setup`。
-
-**跨盘迁移**
-同一磁盘内移动是重命名；`--migrate-from` 跨盘时会真实复制模型，先确认目标盘空间。
-
-**只读技能目录**
-`setup` 会先写探测文件；不可写时以退出码 2 失败，提示复制到可写位置。
-
 ## `[Failed] Task error: <文件> is not exists`
 
 **原因**：输入文件被删了。上游在任务开始时对 `--output-dir` 执行 `shutil.rmtree`（`--clear_cache` 默认开启）。如果把输入放在输出目录里，源文件会先被删掉。
