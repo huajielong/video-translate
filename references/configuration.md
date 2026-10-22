@@ -19,7 +19,7 @@
 | `source_lang` | `en` | 源语言代码，见 `languages.md` |
 | `target_lang` | `zh-cn` | 目标语言代码 |
 | `subtitle_mode` | `hard` | `none` / `hard` / `soft` / `dual-hard` / `dual-soft`；默认硬字幕 |
-| `subtitle_max_chars` | `22` | 每条显示字幕一行最多汉字数；超出拆成多条一行字幕 |
+| `subtitle_max_chars` | `22` | 每条显示字幕一行最多汉字数；超出拆成多条一行字幕。只作用于 CJK；非中文用 pyVideoTrans 的 `other_len`（默认 60） |
 | `translate_channel` | `deepseek` | 翻译渠道名，见 `channels.md` |
 | `deepseek_model` | `deepseek-flash` | DeepSeek 模型名 |
 | `asr_model` | `large-v3-turbo` | Whisper 模型，见 `models.md` |
@@ -48,6 +48,7 @@
 | `video_autorate` | `true` | 用视频片段 PTS 吸收音频长度差，保持音频原速；默认开启 |
 | `max_video_pts_rate` | `1.5` | 视频慢速封顶；配合 `video_autorate`，避免极端慢动作 |
 | `max_video_speedup_rate` | `1.25` | 音频短于槽位时，最多把视频加快多少来收紧句间空白 |
+| `max_phrase_pause_ms` | `300` | 视频片段收紧后的目标句间停顿（毫秒）；实际取 `dubb_min_pause_ms` 与 `dubb_natural_pause_ms` 之间的值 |
 | `max_audio_speed_rate` | `1.0` | 音频加速上限；音频原速默认 1.0 |
 | `max_audio_slow_rate` | `1.0` | 音频放慢上限；音频原速默认 1.0 |
 | `resegment` | `true` | 翻译前合并源碎句、翻译后按句子边界重切 |
@@ -55,26 +56,28 @@
 | `resegment_source_max_chars` | `140` | 源语言合并/切分上限（英文按字符） |
 | `resegment_target_max_chars` | `44` | 规则断句时的目标块上限；最终显示按 `subtitle_max_chars` 一行切条 |
 | `resegment_llm_check` | `true` | 规则断句后由 DeepSeek 审校，生成 TTS 语义单元；显示字幕不被拉长 |
-| `duration_tol_s` | `10` | `video_autorate` 下允许的成品/源片时长差（秒） |
-| `dubb_min_pause_ms` | `200` | 每句结束至少保留的停顿毫秒数；放慢填缝不会低于该停顿 |
-| `dubb_natural_pause_ms` | `600` | 自然短停顿；空档不超过它时保持原速，超过才放慢填缝 |
+| `duration_tol_s` | `15` | `video_autorate` 下允许的成品/源片时长差（秒） |
+| `dubb_min_pause_ms` | `200` | 关闭 `video_autorate`、退回音频填缝时每句至少保留的停顿毫秒数 |
+| `dubb_natural_pause_ms` | `600` | 关闭 `video_autorate` 时的自然短停顿；空档不超过它保持原速，超过才放慢填缝 |
 | `fit_merge` | `true` | 合并同说话人、时间相邻的短句，减少 IndexTTS2 固定开销导致的 2–3× 加速 |
 | `fit_condense` | `true` | 合并后仍超速的句子用 DeepSeek 压缩改写；需要 DeepSeek Key |
 | `fit_force` | `false` | `fit_*` 只对 IndexTTS2 自动启用；其他后端标定后设 `true` 强制 |
 | `fit_max_speed` | `1.12` | 目标最大“配音/槽位”时长比，合并与压缩共用 |
-| `fit_max_chars` | `44` | fit 兜底时合并单元上限；显示字幕仍按一行 22 字切条 |
-| `fit_wrap_width` | `22` | 每行最多汉字数；显示字幕按一行 22 字切，过长拆条 |
+| `fit_max_chars` | `44` | fit 兜底时合并单元上限；显示字幕目标一行 22 字，fallback 超长块可能两行 |
+| `fit_wrap_width` | `22` | 每行最多汉字数；默认 TTS 单元路径按一行 22 字切，过长拆条 |
 | `fit_gap_ms` | `500` | 相邻句间隔超过该值不合并，保留原本的说话停顿 |
 | `fit_pred_a` / `fit_pred_b` | `1.30` / `0.123` | IndexTTS2 时长预测 `秒 ≈ a + b×汉字数`；换后端/音色需重标定 |
 | `fit_condense_speed` | `1.25` | 预测/实际时长比超过该值才触发压缩；避免过度改写 |
 | `loudness` | `-18.0` | 成品集成响度（LUFS） |
-
-> 默认是 **quality_merge** 预设：`line` 逐句参考 + beam 3 + 扩散 25 步 +
-> 放慢 1.05/自然停顿 600ms；比 beam1/15 的快速配置慢约 17%，换取更丰富的情感和更自然的语速。
-> `fit_*` 默认值只对中文 + IndexTTS2 标定；换后端/音色/语言后用
-> `python scripts/fit_calibrate.py --pid <daemon_pid>` 重新拟合，机制与边界见 `audio-fit.md`。
 | `final_suffix` | 空 | 成品文件名后缀，如 `_中文`；状态检查与输出路径共用 |
 | `glossary` | `assets/glossary.txt` | 术语表，`原文=译文` 每行一条 |
+
+> 默认是 **audio_native** 预设：`voice_autorate=false`、TTS 原速、
+> `video_autorate=true`、句间目标停顿 300ms、QC 容差 15s；DeepSeek 审校生成
+> TTS 语义单元，显示字幕每条一行。比 beam1/15 的快速配置慢约 17%，换取更丰富的
+> 情感和更自然的语速。
+> `fit_*` 默认值只对中文 + IndexTTS2 标定；换后端/音色/语言后用
+> `python scripts/fit_calibrate.py --pid <daemon_pid>` 重新拟合，机制与边界见 `audio-fit.md`。
 
 ## 路径解析
 
@@ -114,7 +117,12 @@
 | `VTV_RESTART_BEFORE_TTS` | `1` 时在 prepare 后重启 daemon，对应 `restart_before_tts` |
 | `VTV_DUBBING_CACHE` | 覆盖逐句配音缓存目录；A/B 或强制重新合成时指向空目录 |
 | `VTV_MAX_AUDIO_SPEED_RATE` / `VTV_MAX_AUDIO_SLOW_RATE` | 对应 `max_audio_speed_rate` / `max_audio_slow_rate` |
+| `VTV_MAX_VIDEO_PTS_RATE` / `VTV_MAX_VIDEO_SPEEDUP_RATE` | 对应 `max_video_pts_rate` / `max_video_speedup_rate` |
+| `VTV_MAX_PHRASE_PAUSE_MS` | 对应 `max_phrase_pause_ms` |
 | `VTV_DUBB_MIN_PAUSE_MS` / `VTV_DUBB_NATURAL_PAUSE_MS` | 对应 `dubb_min_pause_ms` / `dubb_natural_pause_ms` |
+| `VTV_CJK_LEN` | 显示字幕一行宽度；`pipeline.py` 由 `subtitle_max_chars` 设置 |
+| `VTV_DURATION_TOL_S` | QC 时长容差；`pipeline.py` 由 `duration_tol_s` 设置 |
+| `VTV_TTS_SRT` | 内部变量：传给 dub 的 TTS 语义单元 SRT；由 `pipeline.py` 设置，不要手工覆盖 |
 | `VTV_FIT_MERGE` / `VTV_FIT_CONDENSE` | `1`/`0`，对应 `fit_merge` / `fit_condense` |
 | `VTV_FIT_FORCE` | `1` 时非 IndexTTS2 也启用 fit（需先标定预测模型） |
 | `VTV_FIT_MAX_SPEED` / `VTV_FIT_MAX_CHARS` | 对应 `fit_max_speed` / `fit_max_chars` |
@@ -152,8 +160,11 @@
 // 保留逐句字幕，关闭配音单元合并/压缩（短句加速会回来）
 { "fit_merge": false, "fit_condense": false }
 
-// 短句更紧凑：允许放慢到 1.3×，停顿降到 150ms
-{ "max_audio_slow_rate": 1.3, "dubb_min_pause_ms": 150 }
+// 句间更紧凑：视频最多加快 1.35×，句间停顿收到 250ms
+{ "max_video_speedup_rate": 1.35, "max_phrase_pause_ms": 250 }
+
+// 关闭视频局部变速、退回音频填缝（保留原片时间轴）
+{ "video_autorate": false, "max_audio_slow_rate": 1.3, "dubb_min_pause_ms": 150 }
 ```
 
 改完运行 `python scripts/pipeline.py doctor` 验证。

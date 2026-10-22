@@ -118,11 +118,13 @@ DEFAULTS = {
     "max_video_pts_rate": 1.5,
     # 音频短于槽位时，最多把视频加快多少来收紧句间空白
     "max_video_speedup_rate": 1.25,
+    # 收紧后保留的句间停顿上限（毫秒）
+    "max_phrase_pause_ms": 300,
     "dubb_min_pause_ms": 200,
     # 自然短停顿；只有超过它的空档才放慢填缝，避免每条短句都被拉慢
     "dubb_natural_pause_ms": 600,
     # video_autorate 会让总时长随音频变化；QC 允许的时长漂移（秒）
-    "duration_tol_s": 10.0,
+    "duration_tol_s": 15.0,
     "loudness": -18.0,
     "final_suffix": "",
     "glossary": "assets/glossary.txt",
@@ -205,10 +207,11 @@ def env(cfg: dict) -> dict:
     e["INDEXTTS2_RESTART_EVERY"] = str(cfg.get("index_restart_every", 0))
     e["VTV_RESTART_BEFORE_TTS"] = "1" if cfg.get("restart_before_tts", True) else "0"
     e["VTV_PIN_DAEMON"] = "1" if cfg.get("pin_daemon", True) else "0"
-    e["VTV_MAX_AUDIO_SPEED_RATE"] = str(cfg.get("max_audio_speed_rate", 30.0))
-    e["VTV_MAX_AUDIO_SLOW_RATE"] = str(cfg.get("max_audio_slow_rate", 1.05))
+    e["VTV_MAX_AUDIO_SPEED_RATE"] = str(cfg.get("max_audio_speed_rate", 1.0))
+    e["VTV_MAX_AUDIO_SLOW_RATE"] = str(cfg.get("max_audio_slow_rate", 1.0))
     e["VTV_MAX_VIDEO_PTS_RATE"] = str(cfg.get("max_video_pts_rate", 1.5))
     e["VTV_MAX_VIDEO_SPEEDUP_RATE"] = str(cfg.get("max_video_speedup_rate", 1.25))
+    e["VTV_MAX_PHRASE_PAUSE_MS"] = str(cfg.get("max_phrase_pause_ms", 300))
     e["VTV_DUBB_MIN_PAUSE_MS"] = str(cfg.get("dubb_min_pause_ms", 200))
     e["VTV_DUBB_NATURAL_PAUSE_MS"] = str(cfg.get("dubb_natural_pause_ms", 600))
     e["VTV_FIT_MERGE"] = "1" if cfg.get("fit_merge", True) else "0"
@@ -222,7 +225,7 @@ def env(cfg: dict) -> dict:
     e["VTV_FIT_PRED_B"] = str(cfg.get("fit_pred_b", 0.123))
     e["VTV_FIT_CONDENSE_SPEED"] = str(cfg.get("fit_condense_speed", 1.25))
     e["VTV_GLOSSARY_FILE"] = str(cfg.get("glossary", ""))
-    e["VTV_CLONE_REF_MODE"] = str(cfg.get("clone_ref_mode", "cluster") or "cluster")
+    e["VTV_CLONE_REF_MODE"] = str(cfg.get("clone_ref_mode", "line") or "line")
     e["VTV_SPK_MAX"] = str(cfg.get("speaker_max", 0) or 0)
     e["VTV_SPK_THRESHOLD"] = str(cfg.get("speaker_threshold", 0.72) or 0.72)
     e["VTV_SPK_MERGE_SIM"] = str(cfg.get("speaker_merge_sim", 0.80) or 0.80)
@@ -239,7 +242,7 @@ def env(cfg: dict) -> dict:
     e.setdefault("PYTHONUTF8", "1")
     e.setdefault("PYTHONIOENCODING", "utf-8")
     if cfg.get("video_autorate"):
-        e["VTV_DURATION_TOL_S"] = str(cfg.get("duration_tol_s", 10.0))
+        e["VTV_DURATION_TOL_S"] = str(cfg.get("duration_tol_s", 15.0))
     e["VTV_CJK_LEN"] = str(cfg.get("subtitle_max_chars", 22))
     if cfg.get("_tts_srt"):
         # TTS units are already complete sentences from the DeepSeek audit;

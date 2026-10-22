@@ -2,14 +2,20 @@
 
 ## 字幕
 
-- 翻译后把超长块按标点拆成 ≤28 字（`_split_long_subs`），时间按字数比例分配。
-- 每条字幕只显示**一行**（上限 22 字，与 QC/`cjk_len` 一致）；完整句过长时拆成多条
-  一行字幕，标点优先，拉丁词（PagedAttention、vLLM、token）保持原子。可用
-  `params.json` 的 `cjk_len` 调小一行宽度，但需同时调小 `fit_wrap_width`。
-- `prep` 的 DeepSeek 审校会把完整句合并成 **TTS 语义单元**（可跨多条显示字幕）；
-  烧录/外挂字幕仍使用短显示块，两者不必一一对应。
-- 双语/软字幕：`--subtitle soft`（`--subtitle-type 2`）可让视频流无损复制；不要把同名 SRT 放在视频旁。
-- 硬字幕（默认）需要一次 NVENC 重编码；软字幕适合可开关字幕的播放器。
+- 翻译阶段先按标点把超长块拆到 ≤28 字（`_split_long_subs`），时间按字数比例分配。
+- 最终显示字幕**每条只显示一行**：中文上限 22 字（`subtitle_max_chars` /
+  `VTV_CJK_LEN` / `cjk_len` / QC 的 `MAX_CJK_PER_LINE` 必须一致）。完整句过长时
+  在标点或空格处拆成多条一行字幕；拉丁技术词（PagedAttention、vLLM、token）保持原子。
+- `prep` 的 DeepSeek 审校把完整句合并成 **TTS 语义单元**（可跨多条显示字幕）；
+  显示字幕在最终音画时间轴上按 TTS 单元重新分配，因此字幕与语音/画面同步。
+  两者块数不同是正常的。
+- 没有 TTS 语义单元、退回 fit 兜底时，显示 SRT 仍按 queue 文本换行，超过 22 字的
+  合并块可能显示成两行；要强制一行，保持 `resegment_llm_check=true`，或把
+  `fit_max_chars` / `resegment_target_max_chars` 调到 ≤22。
+- 非中文目标：一行宽度由 pyVideoTrans 的 `other_len`（默认 60）决定；
+  `subtitle_max_chars` 目前只作用于 CJK，不要直接套用中文的 22 字。
+- 硬字幕（默认）需要一次 NVENC 重编码；软字幕用 `--subtitle soft`，视频流可复制。
+  硬/软二选一，不要把同名 SRT 放在视频旁。
 
 ## 翻译
 
@@ -24,15 +30,20 @@
 
 - 逐句从原片对应时间段裁参考音频（人声分离开启时从 `vocal.wav` 裁）。
 - IndexTTS2 beam=3；实测 beam=1 只快约 10–20%，不建议为速度牺牲韵律。
-- `--voice_autorate`：配音超过字幕槽时加速；Rubberband 保音色。`max_audio_speed_rate=2.5` 是兜底；
-  正常应靠 `fit_merge`/`fit_condense` 把“配音/槽位”压到 1.1× 左右，而不是靠大倍率加速。
+- 默认 **audio_native**：`voice_autorate=false`、`max_audio_speed_rate=1.0`、
+  `max_audio_slow_rate=1.0`，TTS 完全原速，不再为字幕槽拉伸/加速音频。
+  音频长于槽位时由 `video_autorate` 慢放视频片段；音频短于槽位时把视频最多加快
+  `max_video_speedup_rate`（1.25×）到“音频 + `max_phrase_pause_ms`（300ms）”。
+- TTS 边缘统一处理：精确裁到首/末非静音，20ms fade in/out，前后各加 80ms 纯数字
+  静音预滚；用于消除句间“嗖”声，也避免 TTS 自带边缘静音在句间叠加。
+- `fit_merge` / `fit_condense` 只在**没有 TTS 语义单元**时兜底（DeepSeek 不可用或
+  `resegment_llm_check=false`）：合并同说话人相邻短句，再压缩仍超速的句子。
   完整机制、调参、预测模型标定见 `audio-fit.md`。
 - 单句参考太短/含噪声会不稳定；有 BGM 时建议预分离人声。
 - 默认 `clone_ref_mode=line`：逐句参考，保留原句的情绪起伏；`fit_merge` 额外用
   CAMPPlus 聚类做“同说话人”合并键，只合并同一说话人的相邻短句，不会跨说话人。
   `cluster` 每人一个参考、音色最稳但情感较平；`single` 最快。
-- 默认质量预设：beam 3、扩散 25 步、放慢上限 1.05、自然停顿 600ms；
-  比 beam1/15 快配置慢约 17%。详见 `audio-fit.md`。
+- 默认质量预设：beam 3、扩散 25 步；比 beam1/15 快配置慢约 17%。详见 `audio-fit.md`。
 
 ## 响度与音频
 
@@ -44,11 +55,12 @@
 
 | 指标 | 阈值 |
 |---|---|
-| 时长差 | ≤1 s |
+| 时长差 | ≤`duration_tol_s`（默认 15 s；`video_autorate` 会改变成品总时长） |
 | 视频 | h264 / 1280x720 / yuv420p（可按源调整） |
 | 音频 | AAC / 48 kHz / stereo |
 | 响度 | -18 ±1 LUFS，true peak ≤ -1 dBFS |
-| 字幕 | 每块 ≤2 行，无空块/重复 |
+| 字幕 | 每条 **1 行**、CJK ≤22 字，无空块/重复 |
+| 句间停顿 | 约 `max_phrase_pause_ms`（默认 300ms），无异常长空白/爆音 |
 | 术语命中 | ≥95%（允许保留英文术语） |
 | ASR 回读 | 抽检 CER ≤10% |
 

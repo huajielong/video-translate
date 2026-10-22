@@ -117,9 +117,9 @@ python <skill_dir>/scripts/trans_cli.py voices --language en --locale en-US
 
 ## `tts` 任务报成功但没有输出文件
 
-**原因**：上游 bug。单行字幕 + Edge-TTS 时，`videotrans/task/dubbing.py:236-239` 的 `align()` 直接返回，从不生成 `target_wav`，但任务仍报告成功。
+**原因**：上游 bug。单行字幕 + Edge-TTS 时，`videotrans/task/dubbing.py:236-239` 的 `align()` 直接返回，从不生成 `target_wav`，但任务仍报告成功。默认 IndexTTS2 不受影响。
 
-**处理**：字幕至少两行，或改用非 Edge 的 TTS 渠道。封装脚本检测到单行字幕时会打印警告。
+**处理**：用 Edge-TTS 时字幕至少两行，或改用非 Edge 的 TTS 渠道。封装脚本检测到单行字幕时会打印警告。
 
 ## 翻译结果格式错乱 / 字幕缺失
 

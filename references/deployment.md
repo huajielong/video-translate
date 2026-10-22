@@ -96,11 +96,12 @@ python scripts/pipeline.py setup \
   `references/audio-fit.md`；升级上游后需重新应用：
   - `_rate.py` concat 强制 48k/2ch；空档 ≤natural 时保持 TTS 原速（不再把
     `audio_target` 默认设成整个槽位）；audio_native 下音频加速/放慢上限 1.0；
-    第一句不吞片头
-  - `_stage_align.py` 使用 `VTV_TTS_SRT` 时不要用 TTS 单元覆盖显示字幕；对齐前
-    裁剪 TTS 首尾静音（保留 120ms），并从最终时间轴生成一行显示字幕
+    首条字幕槽位从原始起点算，不把片头算进首句
+  - `_stage_align.py` 使用 `VTV_TTS_SRT` 时不要用 TTS 单元覆盖显示字幕；对齐前把
+    TTS 精确裁到首/末非静音，20ms fade，前后各加 80ms 纯静音，并从最终时间轴
+    生成一行显示字幕
   - `_rate.py` 音频短于槽位时把视频最多加快 `max_video_speedup_rate`（默认 1.25）
-    到“音频 + 350ms”，避免源空白留下 1–2s 死气；视频变速后更新队列时间轴
+    到“音频 + 300ms”，避免源空白留下 1–2s 死气；视频变速后更新队列时间轴
   - `_stage_subtitle.py` `cjk_len` 默认 22（与 `fit_wrap_width`、QC 一致）
   - `_stage_dubbing.py` 按时间重叠配对、逐行缓存、每视频固定参考（`clone_fixed.wav`）
   - `_stage_dubbing.py` 配音单元拟合：`fit_merge`/`fit_condense`（同说话人合并、
@@ -115,17 +116,17 @@ python scripts/pipeline.py setup \
     审校（只允许合并/轻微压缩，失败回退规则）；`pipeline.py` 在 `prep` 前后调用，
     并生成 `<target>.tts.srt`
   - `pipeline.py` 的 `post` 在 `video_autorate` 下按成品自身时长输出，
-    QC 用 `duration_tol_s`（默认 10s）允许变速带来的时长漂移
+    QC 用 `duration_tol_s`（默认 15s）允许变速带来的时长漂移
   - `scripts/trans_cli.py` 任务优先直接用 pyVideoTrans venv 的 `pythonw.exe`（fallback
     `uv run --no-sync`），并注入 `_winhide_site` 的 `PYTHONPATH`
   - `scripts/pipeline.py` / `trans_cli.py` 入口 `pythonw`、base pythonw 选择、
-    `VTV_ITT_SITE`、旁路字幕导入、两遍 loudnorm、按源时长 `-t` 裁剪
+    `VTV_ITT_SITE`、旁路字幕导入、两遍 loudnorm、按成品时长 `-t` 裁剪
   - `scripts/pipeline.pyw` 无窗口入口；`scripts/_winhide.py` + `_winhide_site`
     统一 `CREATE_NO_WINDOW`；`scripts/gpu_lock_task.pyw` 替代 `.cmd`
   - `index-tts2-cli/scripts/itts/cli_net.py` `spawn_daemon` 用 base pythonw
     （`pyvenv.cfg` 的 `home`），避免 venv launcher 的 conhost
   - `_stage_translate.py` / `translate_srt.py` 超长块拆分
-  - `_srt_wrap.py` 平衡两行、术语不拆
+  - `_srt_wrap.py` 术语不拆；显示字幕按一行宽度切条
   - `_qwenttslocal.py` 纯 clone 只要求 Base
   - `cli.py` 修复 `video_autorate` 未写入
   - `configure/_paths.py` 支持 `VTV_DUBBING_CACHE` 隔离缓存

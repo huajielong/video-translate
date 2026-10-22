@@ -2,6 +2,9 @@
 
 可迁移的视频翻译流水线：ASR → 翻译 → 克隆配音 → 对齐/合成 → 响度归一化 → QC。
 
+默认 audio_native：DeepSeek 语义重断句、TTS 原速、视频片段局部变速吸收长度差、
+每条字幕一行；Windows 用 `pythonw scripts/pipeline.pyw` 无窗口运行。
+
 Agent 入口、硬规则与按需阅读索引：**`SKILL.md`**。
 
 迁移时只复制技能目录；不要带 `config.json`、`.runtime/`、`vendor/*/.venv`、

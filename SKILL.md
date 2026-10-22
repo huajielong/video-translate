@@ -36,6 +36,33 @@ python scripts/pipeline.py report --out "D:/translated"   # 汇总 QC 到 <out>/
 Windows 后台/Agent 运行用 `pythonw scripts/pipeline.pyw <command>`：解释器没有控制台，
 不会闪 cmd 窗口；没有 stdout 时进度写到 `.runtime/logs/entry.log`。
 
+## 通用处理新视频（默认 audio_native）
+
+1. `doctor` → `serve` → `run --src ... --out ...`；失败重跑同一命令，阶段和逐句配音会命中缓存。
+2. `prep` 先合并源碎句，翻译后按句重切；`resegment_llm_check=true` 时把整段字幕交给
+   DeepSeek 审校，输出 `<target>.tts.srt` 作为 TTS 语义单元；显示字幕另按一行切条。
+3. TTS 保持**绝对原速**；音频长于槽位时慢放视频片段，短于槽位时把视频最多加快
+   `max_video_speedup_rate`（1.25×）到“音频 + `max_phrase_pause_ms`（300ms）”。
+4. 每个 TTS 单元边缘精确裁到首/末非静音，20ms 淡入淡出，前后各加 80ms 纯静音预滚，
+   避免句间“嗖”声。
+5. 显示字幕默认硬字幕、**每条一行**（CJK 上限 `subtitle_max_chars=22`）；软字幕用
+   `--subtitle soft`，硬/软二选一。非中文目标用 `other_len=60`，不要套用 22 字。
+6. `post` 统一 loudnorm；QC 用 `duration_tol_s`（默认 15s）容忍视频变速造成的总时长漂移。
+7. 交付前看 `<out>/QC_SUMMARY.md`：QC PASS、每条一行、字幕与音画同步、句间空白约 300ms。
+   句间仍有长空白/爆音时按 `references/troubleshooting.md` 的“句间”两节排查。
+
+按视频情况调参：
+
+| 情况 | 做法 |
+|---|---|
+| 源视频自带字幕 | `sidecar_subs=true`（默认），跳过 ASR |
+| 多人/音色变化大 | 保持 `clone_ref_mode=line`；只要音色稳可用 `cluster` |
+| 句间空白仍偏长 | 调大 `max_video_speedup_rate` 或调小 `max_phrase_pause_ms` |
+| 想保留更多原片停顿 | 调小 `max_video_speedup_rate` 或调大 `max_phrase_pause_ms` |
+| 无 DeepSeek / 审校失败 | 自动回退规则断句 + `fit_*`；也可设 `resegment_llm_check=false` |
+| 换课程/领域 | 换对应的 `--glossary`（或 `assets/glossary.txt`），否则 QC 术语命中率会按旧词表误判 |
+| 换 TTS 后端/音色/语言 | 先试听，再按 `references/audio-fit.md` 重新标定 `fit_pred_a/b` |
+
 ## 按需阅读
 
 **只读当前任务需要的那一份，不要预读整个 `references/`。**
@@ -47,8 +74,9 @@ Windows 后台/Agent 运行用 `pythonw scripts/pipeline.pyw <command>`：解释
 | 理解阶段、并发、断点续跑、dub-only | `references/pipeline.md` |
 | 调字幕/翻译/克隆/响度/QC 质量 | `references/quality.md` |
 | 配音忽快忽慢、短句被加速、句间停顿、`fit_*` 标定 | `references/audio-fit.md` |
+| 句间长空白、句间“嗖”声/爆音、字幕与音画不同步 | `references/troubleshooting.md` |
 | 首次安装、迁移新机器、端口与安全 | `references/deployment.md` |
-| 报错、两层字幕、CUDA_FATAL | `references/troubleshooting.md` |
+| 报错、两层字幕、CUDA_FATAL、QC 时长失败 | `references/troubleshooting.md` |
 | Windows 弹黑窗、conhost、`.cmd`、进程模型 | `references/deployment.md` |
 | `fit_merge` 合并 0 次、块数暴增、聚类失败 | `references/audio-fit.md` |
 | GPU 锁频、TTS 越跑越慢、CPU 降频、电池 | `references/performance.md` |
@@ -69,8 +97,9 @@ AAC 48 kHz、-18 LUFS、术语表 `assets/glossary.txt`。软字幕用 `--subtit
 视频旁有 `.en-us.vtt` / `.en.vtt` / `.en.srt` 时直接导入，跳过 ASR（`sidecar_subs=true`）。
 默认 **audio_native（声音优先）**：翻译前后 `resegment` 重断句，DeepSeek 审校后把
 完整句作为 TTS 语义单元（显示字幕仍是短块）；`voice_autorate=false` 保持 TTS 原速，
-`video_autorate=true` 用视频片段 PTS 吸收长度差。`fit_merge`/`fit_condense` 只在没有
-TTS 语义单元时兜底。细节见 `references/audio-fit.md`，配置见 `configuration.md`。
+`video_autorate=true` 用视频片段 PTS 吸收长度差：音频短时最多加快 1.25× 并保留
+`max_phrase_pause_ms=300`，QC 用 `duration_tol_s=15`。`fit_merge`/`fit_condense`
+只在没有 TTS 语义单元时兜底。细节见 `references/audio-fit.md`，配置见 `configuration.md`。
 Windows 上 API/shim/daemon 统一用 base `pythonw`，venv 的 `site-packages` 走
 `PYTHONPATH`；聚类失败会让 `fit_merge` 0 合并、块数暴增。
 

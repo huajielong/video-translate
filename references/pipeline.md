@@ -6,29 +6,46 @@
 源视频
   │
   ├─ prep: ASR (faster-whisper large-v3-turbo) 或旁路字幕（.en-us.vtt/.en.vtt/.en.srt）→ en.srt
-  │        MT  (DeepSeek + glossary + context) → zh-cn.srt（超长块拆分）
+  │        源重断句（resegment_srt）→ MT (DeepSeek + glossary + context) → zh-cn.srt
+  │        目标重断句 → DeepSeek 审校（resegment_llm_check）→ zh-cn.tts.srt
+  │        （TTS 语义单元；显示字幕仍是规则短块）
   │
   ├─ dub: vtv --no-clear-cache（预置 en.srt / zh-cn.srt，跳过 ASR/MT）
   │        prepare: 提取视频/音频、可选人声分离
   │        refs: 逐句参考 + CAMPPlus 聚类（line 保留逐句 ref，聚类只做合并键）
-  │        fit: 合并同说话人短句 + 压缩仍超速句（TTS 前，只改文本/时间）
-  │        tts: IndexTTS2 克隆（默认 beam 3 / 扩散 25）
-  │        align: Rubberband 保音色变速 + 字幕重定时
+  │        fit: 没有 TTS 语义单元时兜底：合并同说话人短句 + 压缩仍超速句
+  │        tts: IndexTTS2 克隆（默认 beam 3 / 扩散 25），按 TTS 语义单元合成
+  │        align: TTS 边缘裁剪/fade/80ms 预滚；音频原速；视频片段 PTS 微调；
+  │               最终 queue 时间轴 → 一行显示字幕
   │        assembling: 硬/软字幕 + 音轨合成
   │
-  └─ post: 两遍 loudnorm -18 LUFS / 48 kHz → 按源时长裁剪 → QC → 原子替换
+  └─ post: 两遍 loudnorm -18 LUFS / 48 kHz → 按成品时长裁剪 → QC（duration_tol_s）→ 原子替换
 ```
 
-## 配音单元拟合（fit）
+## 语义重断句与 TTS 单元
 
-`dub` 内部、说话人聚类之后、TTS 之前：
+`prep` 在翻译前后各做一次断句整理：
+
+- `resegment_srt.py` 合并源碎句、按标点/长度重切；源合并上限
+  `resegment_source_max_chars`（140），目标规则块上限 `resegment_target_max_chars`（44）。
+- `resegment_llm_check=true` 时，`resegment_check.py` 把整段字幕交给 DeepSeek，
+  只允许合并相邻块或轻微压缩，不改事实/数字/术语；结果写成 `<target>.tts.srt`。
+- 显示字幕按 `subtitle_max_chars`（22 个汉字）切成一行的短块；TTS 使用完整语义单元，
+  两者块数不同是正常的。DeepSeek 失败时自动回退规则断句。
+- 有 `.tts.srt` 时 `pipeline.py` 通过 `VTV_TTS_SRT` 传给 dub，`_stage_align.py`
+  会从最终音画时间轴重新生成显示字幕，不会用 TTS 单元覆盖显示 SRT。
+
+## 配音单元拟合（fit，兜底）
+
+`dub` 内部、说话人聚类之后、TTS 之前；**只有没有 TTS 语义单元时才执行**：
 
 - `fit_merge`：同一说话人（`cluster`/`single` 用参考路径，`line` 用 CAMPPlus
-  聚类键）、间隔 ≤500ms 的相邻短句，合并后 ≤36 字且仍能两行显示，就合并成
+  聚类键）、间隔 ≤500ms 的相邻短句，合并后 ≤44 字且能按一行显示，就合并成
   一个配音单元；优先合并最超速的句子。
 - `fit_condense`：合并后仍 >1.25× 的句子，用 DeepSeek 压到约 1.12×；
   术语/英文技术词丢失则拒绝。重跑时优先用 `DUBBING_CACHE` 的真实音频时长判断。
-- 合并/压缩只改目标文本与字幕条数，不改视频、不切视频；`video_autorate` 仍关闭。
+- fit 本身只改目标文本与字幕条数，不切视频；视频是否局部变速由 `video_autorate`
+  （默认 `true`）决定。
 - 详细原理、配置、标定与排错见 `audio-fit.md`。
 
 ## 目录
@@ -40,7 +57,7 @@
     <stem>_中文.srt
     <stem>_原文.srt
   _work/                     中间文件（可删）
-    prep/<stem>/{stt,mt,en.srt,zh-cn.srt}
+    prep/<stem>/{stt,mt,en.srt,zh-cn.srt,zh-cn.tts.srt}
     <stem>/{en.srt,zh-cn.srt,<stem>.mp4}
   QC_SUMMARY.md
 ```
@@ -75,11 +92,13 @@ GPU 高频/CPU 降频/电池优化见 `performance.md`。
 trans_cli.py vtv <src> --source en --target zh-cn \
   --tts-channel index --voice clone \
   --outdir <work> --overwrite --no-clear-cache \
-  --extra-args=--voice_autorate
+  --extra-args=--video_autorate
 ```
 
-- 预置文件必须是 `<outdir>/en.srt` 与 `<outdir>/zh-cn.srt`。
+- 预置文件必须是 `<outdir>/en.srt` 与 `<outdir>/zh-cn.srt`；有 DeepSeek 审校结果时
+  再把 `<target>.tts.srt` 传给 dub（`pipeline.py` 用 `VTV_TTS_SRT`）。
 - `--overwrite` 让包装脚本接受非空目录；`--no-clear-cache` 阻止上游删除目录。
+- 默认 audio_native 只传 `--video_autorate`，**不要**再传 `--voice_autorate`。
 - 只给 `--overwrite` 会丢掉预置 SRT。
 
 ## 配置与路径
