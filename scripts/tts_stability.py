@@ -151,10 +151,22 @@ def wait_daemon_ready(api: str, timeout: float = 180.0) -> float:
 
 def stop_daemon(cli: str, api: str) -> float:
     """Stop the daemon; the next /v1/tts request will cold-start it."""
-    if not Path(cli).exists():
+    path = Path(cli)
+    if not path.exists():
         raise RuntimeError(f"indextts2 CLI not found: {cli}")
+    cmd = [cli, "stop", "--json"]
+    if path.suffix.lower() == ".cmd":
+        # Avoid cmd.exe -> powershell/where grandchildren, which can flash a
+        # console window even under CREATE_NO_WINDOW.
+        home = path.parent.parent
+        entry = home / "scripts" / "indextts2.py"
+        for py in (home / "venv" / "python.exe",
+                   home / "venv" / "Scripts" / "python.exe"):
+            if py.is_file() and entry.is_file():
+                cmd = [str(py), str(entry), "stop", "--json"]
+                break
     t0 = time.perf_counter()
-    subprocess.run([cli, "stop", "--json"], capture_output=True, timeout=120)
+    subprocess.run(cmd, capture_output=True, timeout=120)
     # Wait until the API stops reporting a ready daemon, then return.  The
     # next request pays the cold-start cost, which is what we want to measure.
     deadline = time.time() + 60

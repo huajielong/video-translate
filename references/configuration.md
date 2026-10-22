@@ -33,7 +33,7 @@
 | `pin_daemon` | `true` | 把真实 daemon 固定到 P-core（0–15）并设 High；daemon 启动时自绑定，客户端还会兜底 |
 | `probe` | `true` | daemon 把逐句耗时写入 `.runtime/logs/tts_probe.jsonl`；改完需重启 `serve` |
 | `daemon_affinity_mask` | `0xFFFF` | daemon 自绑定使用的 CPU 掩码；24 线程 i7-14650HX 的 P-core 0–15 |
-| `gpu_lock_clock` | `0` | 可选：非 0 时由**管理员权限的** `serve` 用 `nvidia-smi -lgc X,X` 锁 GPU 时钟；普通用户请用 `scripts/gpu_lock_task.cmd` 注册登录任务 |
+| `gpu_lock_clock` | `0` | 可选：非 0 时由**管理员权限的** `serve` 用 `nvidia-smi -lgc X,X` 锁 GPU 时钟；普通用户请用 `pythonw scripts/gpu_lock_task.pyw` 注册登录任务 |
 | `clone_ref_mode` | `line` | 默认逐句参考保留情感；`fit_merge` 额外用 CAMPPlus 聚类只做“同说话人”合并键。`single`=整片固定参考（最快）；`cluster`=每人一个参考（音色最稳） |
 | `speaker_max` | `0` | 聚类最大说话人数；`0` = 自动 |
 | `speaker_threshold` | `0.72` | 聚类余弦相似度阈值；越高越容易分出更多说话人 |
@@ -122,7 +122,7 @@
 ## GPU 锁频 / 电池 / TTS 变慢
 
 见 `performance.md`。`gpu_lock_clock` 非 0 时由管理员权限的 `serve` 锁频；
-普通用户用 `scripts\gpu_lock_task.cmd` 注册登录任务。
+普通用户用 `pythonw scripts\gpu_lock_task.pyw` 注册登录任务。
 
 ## 常见改动
 

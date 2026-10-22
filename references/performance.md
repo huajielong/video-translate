@@ -14,14 +14,14 @@ GPT ~3.8s、总耗时 ~5.9s/句，100 句连续无退化。
 管理员运行一次，注册登录任务：
 
 ```bat
-scripts\gpu_lock_task.cmd
+pythonw scripts\gpu_lock_task.pyw
 ```
 
 任务 `video-translate-gpu-clock` 在登录时执行 `nvidia-smi -lgc 300,1200`。
 撤销并恢复默认：
 
 ```bat
-scripts\gpu_lock_task.cmd remove
+pythonw scripts\gpu_lock_task.pyw remove
 ```
 
 锁频期间游戏/3D 渲染性能受限；不跑 TTS 时可 `nvidia-smi -rgc`。
