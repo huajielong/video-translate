@@ -20,11 +20,35 @@ import subprocess
 _applied = False
 
 
+def hide_own_console() -> None:
+    """Hide the console Windows created *for this process*.
+
+    Python itself is a console program: if the launcher (agent, editor, task
+    runner) has no console, Windows allocates a window before any of our code
+    runs.  The subprocess patch below cannot prevent that.  Hiding is safe only
+    when this process is the sole console client; a real terminal shares the
+    console with its shell, so its window stays visible.
+    """
+    if os.name != "nt":
+        return
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    hwnd = kernel32.GetConsoleWindow()
+    if not hwnd:
+        return
+    buf = (ctypes.c_uint * 8)()
+    count = kernel32.GetConsoleProcessList(buf, 8)
+    if count <= 1:
+        ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+
+
 def hide_console_windows() -> None:
     global _applied
     if _applied or os.name != "nt":
         return
 
+    hide_own_console()
     _popen = subprocess.Popen
     no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     detached = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)

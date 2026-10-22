@@ -11,6 +11,14 @@ import os
 import subprocess
 
 if os.name == "nt" and not getattr(subprocess, "_vtv_no_window", False):
+    import ctypes
+
+    _hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+    if _hwnd:
+        _buf = (ctypes.c_uint * 8)()
+        if ctypes.windll.kernel32.GetConsoleProcessList(_buf, 8) <= 1:
+            ctypes.windll.user32.ShowWindow(_hwnd, 0)
+
     _popen = subprocess.Popen
     _no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     _keep = (getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
