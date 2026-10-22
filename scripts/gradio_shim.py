@@ -10,11 +10,17 @@ import hashlib
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
-import gradio as gr
-import requests
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _winhide import hide_console_windows  # noqa: E402
+
+hide_console_windows()
+
+import gradio as gr  # noqa: E402
+import requests  # noqa: E402
 
 API = os.environ.get("INDEXTTS2_API", "http://127.0.0.1:8791").rstrip("/")
 KEY = os.environ.get("INDEXTTS2_API_KEY", "")

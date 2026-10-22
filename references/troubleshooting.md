@@ -1,5 +1,24 @@
 # 常见问题
 
+## 执行任务时弹出 cmd / PowerShell 黑窗口
+
+**原因**：Windows 给每个控制台子系统子进程（`python.exe`、`uv.exe`、`ffmpeg.exe`、
+`cmd.exe` 跑 `.cmd`）分配新控制台窗口——只要父进程自己没有控制台。从编辑器/Agent
+驱动技能时就是这种情况；重定向 stdout/stderr 并不能阻止窗口。典型来源是 `serve`
+的 IndexTTS2 API、Gradio 桥接、每片 TTS 前的 `indextts2.cmd stop`、以及 API 内的
+ffmpeg 转码。
+
+**处理（本版本已改）**：
+- `scripts/_winhide.py` 在入口进程内把 `subprocess.Popen` 默认加上
+  `CREATE_NO_WINDOW`；`pipeline.py`、`trans_cli.py`、`gradio_shim.py`、`qc.py`、
+  `tts_stability.py` 均调用。
+- `scripts/_winhide_site/sitecustomize.py` 通过 `PYTHONPATH` 注入 IndexTTS2 API
+  及其 Python 子进程，覆盖 API 内部的 ffmpeg 调用。
+- 刻意使用 `DETACHED_PROCESS` / `CREATE_NEW_CONSOLE` 的调用保持原样（Windows
+  不允许与 `CREATE_NO_WINDOW` 组合）。
+- 若仍有窗口，说明是技能之外的旧进程：`pipeline.py serve --stop` 后重新 `serve`；
+  检查是否有旧版 `gradio_shim.py` / `indextts2` 仍在运行。
+
 ## 成品有两层字幕
 
 **原因**：视频已烧录硬字幕，播放器又自动加载了同名的 `.srt`。

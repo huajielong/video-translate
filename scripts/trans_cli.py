@@ -76,6 +76,11 @@ VERSION = "1.3.0"
 #         <skill>/vendor/pyvideotrans   (tracked upstream source)
 #         <skill>/tools                 (provisioned, untracked)
 SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+from _winhide import hide_console_windows  # noqa: E402
+
+hide_console_windows()
+
 SKILL_DIR = SCRIPT_DIR.parent
 BUNDLED_HOME = SKILL_DIR / "vendor" / "pyvideotrans"
 

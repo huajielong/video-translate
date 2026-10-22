@@ -26,6 +26,11 @@ import time
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _winhide import hide_console_windows  # noqa: E402
+
+hide_console_windows()
+
 SKILL = Path(__file__).resolve().parent.parent
 SCRIPTS = SKILL / "scripts"
 VENDOR = SKILL / "vendor"
@@ -170,10 +175,10 @@ def env(cfg: dict) -> dict:
     e["VTV_RESTART_BEFORE_TTS"] = "1" if cfg.get("restart_before_tts", True) else "0"
     e["VTV_PIN_DAEMON"] = "1" if cfg.get("pin_daemon", True) else "0"
     e["VTV_MAX_AUDIO_SPEED_RATE"] = str(cfg.get("max_audio_speed_rate", 30.0))
-    e["VTV_MAX_AUDIO_SLOW_RATE"] = str(cfg.get("max_audio_slow_rate", 1.2))
+    e["VTV_MAX_AUDIO_SLOW_RATE"] = str(cfg.get("max_audio_slow_rate", 1.05))
     e["VTV_MAX_VIDEO_PTS_RATE"] = str(cfg.get("max_video_pts_rate", 1.5))
     e["VTV_DUBB_MIN_PAUSE_MS"] = str(cfg.get("dubb_min_pause_ms", 200))
-    e["VTV_DUBB_NATURAL_PAUSE_MS"] = str(cfg.get("dubb_natural_pause_ms", 350))
+    e["VTV_DUBB_NATURAL_PAUSE_MS"] = str(cfg.get("dubb_natural_pause_ms", 600))
     e["VTV_FIT_MERGE"] = "1" if cfg.get("fit_merge", True) else "0"
     e["VTV_FIT_CONDENSE"] = "1" if cfg.get("fit_condense", True) else "0"
     e["VTV_FIT_FORCE"] = "1" if cfg.get("fit_force", False) else "0"
@@ -196,6 +201,13 @@ def env(cfg: dict) -> dict:
         pass
     e.setdefault("PYTHONUTF8", "1")
     e.setdefault("PYTHONIOENCODING", "utf-8")
+    if IS_WINDOWS:
+        # Covers Python grandchildren we do not launch ourselves (the IndexTTS2
+        # API's ffmpeg calls, uv -> cli.py).  See _winhide_site/sitecustomize.py.
+        site = SCRIPTS / "_winhide_site"
+        if site.is_dir():
+            prev = e.get("PYTHONPATH", "")
+            e["PYTHONPATH"] = str(site) + (os.pathsep + prev if prev else "")
     return e
 
 
@@ -362,7 +374,11 @@ def _kill(name: str) -> None:
 
 def _popen_kwargs() -> dict:
     if IS_WINDOWS:
-        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP
+        # The API and shim are long-lived; without this they each own a visible
+        # console window when the skill runs from an agent/editor (no console).
+        flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        return {"creationflags": flags}
     return {"start_new_session": True}
 
 

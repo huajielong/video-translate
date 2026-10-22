@@ -14,6 +14,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _winhide import hide_console_windows  # noqa: E402
+
+hide_console_windows()
+
 DURATION_TOL_S = 1.0
 LOUDNESS_TARGET = -18.0
 LOUDNESS_TOL = 1.0
