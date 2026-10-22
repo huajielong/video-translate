@@ -3,9 +3,9 @@
 ## 字幕
 
 - 翻译后把超长块按标点拆成 ≤28 字（`_split_long_subs`），时间按字数比例分配。
-- 显示时按 22 字/行平衡断成两行（与 `fit_wrap_width`、QC 的 22 一致）；标点优先，
-  拉丁词（PagedAttention、vLLM、token）保持原子。可用 `params.json` 的 `cjk_len`
-  调回 18/15，但需同时调小 `fit_wrap_width`、`fit_max_chars`。
+- 每条字幕只显示**一行**（上限 22 字，与 QC/`cjk_len` 一致）；完整句过长时拆成多条
+  一行字幕，标点优先，拉丁词（PagedAttention、vLLM、token）保持原子。可用
+  `params.json` 的 `cjk_len` 调小一行宽度，但需同时调小 `fit_wrap_width`。
 - `prep` 的 DeepSeek 审校会把完整句合并成 **TTS 语义单元**（可跨多条显示字幕）；
   烧录/外挂字幕仍使用短显示块，两者不必一一对应。
 - 双语/软字幕：`--subtitle soft`（`--subtitle-type 2`）可让视频流无损复制；不要把同名 SRT 放在视频旁。

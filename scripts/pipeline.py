@@ -98,6 +98,8 @@ DEFAULTS = {
     # DeepSeek audits the rule-based sentence boundaries; it only proposes
     # TTS groups, while display cues stay at the rule-based boundaries.
     "resegment_llm_check": True,
+    # 一条显示字幕的宽度（CJK 字数）；过长会拆成多条一行字幕
+    "subtitle_max_chars": 22,
     # 配音单元拟合：合并同说话人的相邻短句，再压缩仍超长的句子。
     # 预测模型按 IndexTTS2 实测拟合：audio ≈ 1.30s + 0.123s/汉字。
     "fit_merge": True,
@@ -235,6 +237,7 @@ def env(cfg: dict) -> dict:
     e.setdefault("PYTHONIOENCODING", "utf-8")
     if cfg.get("video_autorate"):
         e["VTV_DURATION_TOL_S"] = str(cfg.get("duration_tol_s", 10.0))
+    e["VTV_CJK_LEN"] = str(cfg.get("subtitle_max_chars", 22))
     if cfg.get("_tts_srt"):
         # TTS units are already complete sentences from the DeepSeek audit;
         # don't merge/condense them again (subtitles stay rule-based).

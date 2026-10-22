@@ -18,7 +18,8 @@
 | `backend` | `index` | `index` / `qwen3local` / `f5` |
 | `source_lang` | `en` | 源语言代码，见 `languages.md` |
 | `target_lang` | `zh-cn` | 目标语言代码 |
-| `subtitle_mode` | `hard` | `none` / `hard` / `soft` / `dual-hard` / `dual-soft` |
+| `subtitle_mode` | `hard` | `none` / `hard` / `soft` / `dual-hard` / `dual-soft`；默认硬字幕 |
+| `subtitle_max_chars` | `22` | 每条显示字幕一行最多汉字数；超出拆成多条一行字幕 |
 | `translate_channel` | `deepseek` | 翻译渠道名，见 `channels.md` |
 | `deepseek_model` | `deepseek-flash` | DeepSeek 模型名 |
 | `asr_model` | `large-v3-turbo` | Whisper 模型，见 `models.md` |
@@ -51,7 +52,7 @@
 | `resegment` | `true` | 翻译前合并源碎句、翻译后按句子边界重切 |
 | `resegment_max_gap_ms` | `900` | 允许合并的相邻字幕间隔 |
 | `resegment_source_max_chars` | `140` | 源语言合并/切分上限（英文按字符） |
-| `resegment_target_max_chars` | `44` | 目标字幕显示上限（22 字 × 2 行） |
+| `resegment_target_max_chars` | `44` | 规则断句时的目标块上限；最终显示按 `subtitle_max_chars` 一行切条 |
 | `resegment_llm_check` | `true` | 规则断句后由 DeepSeek 审校，生成 TTS 语义单元；显示字幕不被拉长 |
 | `duration_tol_s` | `10` | `video_autorate` 下允许的成品/源片时长差（秒） |
 | `dubb_min_pause_ms` | `200` | 每句结束至少保留的停顿毫秒数；放慢填缝不会低于该停顿 |
@@ -60,8 +61,8 @@
 | `fit_condense` | `true` | 合并后仍超速的句子用 DeepSeek 压缩改写；需要 DeepSeek Key |
 | `fit_force` | `false` | `fit_*` 只对 IndexTTS2 自动启用；其他后端标定后设 `true` 强制 |
 | `fit_max_speed` | `1.12` | 目标最大“配音/槽位”时长比，合并与压缩共用 |
-| `fit_max_chars` | `44` | 合并后单条字幕最多汉字数，约两行显示；语义半句合并也受此限制 |
-| `fit_wrap_width` | `22` | 合并后每行最多汉字数；`22×2=44`，配合 `fit_max_chars` |
+| `fit_max_chars` | `44` | fit 兜底时合并单元上限；显示字幕仍按一行 22 字切条 |
+| `fit_wrap_width` | `22` | 每行最多汉字数；显示字幕按一行 22 字切，过长拆条 |
 | `fit_gap_ms` | `500` | 相邻句间隔超过该值不合并，保留原本的说话停顿 |
 | `fit_pred_a` / `fit_pred_b` | `1.30` / `0.123` | IndexTTS2 时长预测 `秒 ≈ a + b×汉字数`；换后端/音色需重标定 |
 | `fit_condense_speed` | `1.25` | 预测/实际时长比超过该值才触发压缩；避免过度改写 |

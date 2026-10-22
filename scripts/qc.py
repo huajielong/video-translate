@@ -24,7 +24,7 @@ DURATION_TOL_S = float(os.environ.get("VTV_DURATION_TOL_S", "1.0"))
 LOUDNESS_TARGET = -18.0
 LOUDNESS_TOL = 1.0
 TRUE_PEAK_MAX = -1.0
-MAX_LINES = 2
+MAX_LINES = 1
 # Must match fit_wrap_width (22): merged semantic sentences can be 44 chars,
 # displayed as 2 lines of 22.  The old 18 came from the pre-merge era.
 MAX_CJK_PER_LINE = 22

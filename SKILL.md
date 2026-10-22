@@ -63,8 +63,9 @@ IndexTTS2 服务本身的 API/音色/情感文档在 `vendor/index-tts2-cli/refe
 
 ## 默认值
 
-`index` 克隆后端、硬字幕、`en → zh-cn`、`mt_workers=4`、AAC 48 kHz、-18 LUFS、
-术语表 `assets/glossary.txt`。语言不写死：`--source` / `--target` / `--glossary` 均可配置。
+`index` 克隆后端、硬字幕（每条显示一行，22 字上限）、`en → zh-cn`、`mt_workers=4`、
+AAC 48 kHz、-18 LUFS、术语表 `assets/glossary.txt`。软字幕用 `--subtitle soft`。
+语言不写死：`--source` / `--target` / `--glossary` 均可配置。
 视频旁有 `.en-us.vtt` / `.en.vtt` / `.en.srt` 时直接导入，跳过 ASR（`sidecar_subs=true`）。
 默认 **audio_native（声音优先）**：翻译前后 `resegment` 重断句，DeepSeek 审校后把
 完整句作为 TTS 语义单元（显示字幕仍是短块）；`voice_autorate=false` 保持 TTS 原速，
