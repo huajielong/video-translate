@@ -41,7 +41,45 @@ DEFAULT_API = "http://127.0.0.1:8791"
 IS_WINDOWS = platform.system().lower() == "windows"
 
 sys.path.insert(0, str(SCRIPTS))
-import ab  # noqa: E402
+from _winhide import hide_console_windows  # noqa: E402
+
+hide_console_windows()
+
+
+def parse_srt(path: Path) -> list[dict]:
+    """Parse SRT blocks into {start, end, text} milliseconds."""
+    content = path.read_text(encoding="utf-8-sig", errors="replace").strip()
+    out = []
+    for block in re.split(r"\n\s*\n", content):
+        lines = [x.strip("﻿").strip() for x in block.splitlines() if x.strip()]
+        if len(lines) < 3:
+            continue
+        m = re.match(
+            r"(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)",
+            lines[1])
+        if not m:
+            continue
+        g = list(map(int, m.groups()))
+        out.append({
+            "start": g[0] * 3600000 + g[1] * 60000 + g[2] * 1000 + g[3],
+            "end": g[4] * 3600000 + g[5] * 60000 + g[6] * 1000 + g[7],
+            "text": "\n".join(lines[2:]).strip(),
+        })
+    return out
+
+
+def find_srt(ns) -> Path:
+    """Resolve the translated SRT for a stem (same layout as the pipeline)."""
+    if getattr(ns, "zh", ""):
+        return Path(ns.zh)
+    out = Path(ns.out)
+    stem, target = ns.stem, ns.target
+    for p in (out / "_work" / "prep" / stem / f"{target}.srt",
+              out / "_字幕" / f"{stem}.{target}.srt",
+              out / f"{stem}.{target}.srt"):
+        if p.is_file():
+            return p
+    raise SystemExit(f"translated SRT not found under {out} for {stem} ({target})")
 
 
 def find_ffmpeg() -> str:
@@ -71,7 +109,7 @@ def srt_path(args) -> Path:
     if args.zh:
         return Path(args.zh)
     ns = argparse.Namespace(zh="", out=args.out, stem=args.stem, target=args.target)
-    return ab.find_srt(ns)
+    return find_srt(ns)
 
 
 def make_ref(src: Path, out: Path, start: float = 10.0, seconds: float = 10.0) -> Path:
@@ -482,7 +520,7 @@ def main() -> int:
     args = ap.parse_args()
 
     srt = srt_path(args)
-    items = ab.parse_srt(srt)[:args.blocks]
+    items = parse_srt(srt)[:args.blocks]
     if not items:
         print(f"no subtitle blocks in {srt}")
         return 2
