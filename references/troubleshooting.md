@@ -73,8 +73,10 @@ GPU 已锁频且 CPU 稳定但 GPT 仍随句数上升时，才考虑 `index_rest
   时才退回音频填缝（空档 ≤`dubb_natural_pause_ms` 默认 600ms 保持原速，超过才最多
   放慢 `max_audio_slow_rate`）；
 - `dubb_min_pause_ms`（默认 200ms）是音频填缝的底线；
-- 如果段落间仍有长停顿，那是源片本身的停顿；不要用放慢音频去填，优先用
-  `resegment`/TTS 语义单元保证句子内部连贯；
+- 对齐前会裁掉 TTS 首尾静音（保留 120ms），音频短于槽位时把视频最多加快
+  `max_video_speedup_rate`（默认 1.25）到“音频 + 350ms”，所以不会再把整段源空白
+  留成 1–2s 死气；如果仍觉得某处停顿长，先看 `silencedetect` 是否真的 >1s；
+- 想保留更多原片停顿：调小 `max_video_speedup_rate` 或调大 natural pause；
 - 想切碎/更紧凑：调小 `resegment_max_gap_ms` 或关闭 `resegment_llm_check`；
 - 修改后重跑同一命令即可，逐句 TTS 缓存会复用。
 

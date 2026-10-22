@@ -116,6 +116,8 @@ DEFAULTS = {
     "max_audio_speed_rate": 1.0,
     "max_audio_slow_rate": 1.0,
     "max_video_pts_rate": 1.5,
+    # 音频短于槽位时，最多把视频加快多少来收紧句间空白
+    "max_video_speedup_rate": 1.25,
     "dubb_min_pause_ms": 200,
     # 自然短停顿；只有超过它的空档才放慢填缝，避免每条短句都被拉慢
     "dubb_natural_pause_ms": 600,
@@ -206,6 +208,7 @@ def env(cfg: dict) -> dict:
     e["VTV_MAX_AUDIO_SPEED_RATE"] = str(cfg.get("max_audio_speed_rate", 30.0))
     e["VTV_MAX_AUDIO_SLOW_RATE"] = str(cfg.get("max_audio_slow_rate", 1.05))
     e["VTV_MAX_VIDEO_PTS_RATE"] = str(cfg.get("max_video_pts_rate", 1.5))
+    e["VTV_MAX_VIDEO_SPEEDUP_RATE"] = str(cfg.get("max_video_speedup_rate", 1.25))
     e["VTV_DUBB_MIN_PAUSE_MS"] = str(cfg.get("dubb_min_pause_ms", 200))
     e["VTV_DUBB_NATURAL_PAUSE_MS"] = str(cfg.get("dubb_natural_pause_ms", 600))
     e["VTV_FIT_MERGE"] = "1" if cfg.get("fit_merge", True) else "0"

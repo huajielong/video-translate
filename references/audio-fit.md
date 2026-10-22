@@ -32,13 +32,17 @@ IndexTTS2 **每句有固定开销**（中文实测约 `1.3s + 0.123s/汉字`）�
 
 - `voice_autorate=false`、`max_audio_speed_rate=1.0`、`max_audio_slow_rate=1.0`：
   TTS 音频完全原速，不再为槽位拉伸；
-- `video_autorate=true`：音频比槽位长时，按片段 PTS 轻微慢放视频；音频短时保留
-  自然静音；
+- `video_autorate=true`：音频比槽位长时，按片段 PTS 轻微慢放视频；音频短时把视频
+  加快（上限 `max_video_speedup_rate`，默认 1.25）到“音频 + 约 350ms 自然停顿”，
+  避免整段源空白变成死气；
+- 对齐前会裁掉 TTS 音频首尾静音（保留约 120ms 余量），否则每句的 1–2s 边缘静音
+  会在句间叠加；
 - 有 TTS 语义单元时关闭 `fit_merge`/`fit_condense`，避免二次改写音频；
 - `duration_tol_s`（默认 10s）允许视频变速带来的成品时长漂移。
 
-实测 001：音频加速 `False`、视频慢速 `True`，成品 220.1s（源 214.5s，+5.6s），
-显示字幕 83 条、全部一行、QC PASS。
+实测 001：音频加速 `False`、视频慢速 `True`，TTS 首尾静音裁剪 + 视频快/慢微调后，
+成品 209.5s（源 214.5s，−5.0s），显示字幕 82 条、全部一行、QC PASS；原来
+14.1–16.5s 的 2.4s 句间空白消失。
 
 ## fit 兜底（无 TTS 语义单元时）
 

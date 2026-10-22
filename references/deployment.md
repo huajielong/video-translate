@@ -97,7 +97,10 @@ python scripts/pipeline.py setup \
   - `_rate.py` concat 强制 48k/2ch；空档 ≤natural 时保持 TTS 原速（不再把
     `audio_target` 默认设成整个槽位）；audio_native 下音频加速/放慢上限 1.0；
     第一句不吞片头
-  - `_stage_align.py` 使用 `VTV_TTS_SRT` 时不要用 TTS 单元覆盖显示字幕
+  - `_stage_align.py` 使用 `VTV_TTS_SRT` 时不要用 TTS 单元覆盖显示字幕；对齐前
+    裁剪 TTS 首尾静音（保留 120ms），并从最终时间轴生成一行显示字幕
+  - `_rate.py` 音频短于槽位时把视频最多加快 `max_video_speedup_rate`（默认 1.25）
+    到“音频 + 350ms”，避免源空白留下 1–2s 死气；视频变速后更新队列时间轴
   - `_stage_subtitle.py` `cjk_len` 默认 22（与 `fit_wrap_width`、QC 一致）
   - `_stage_dubbing.py` 按时间重叠配对、逐行缓存、每视频固定参考（`clone_fixed.wav`）
   - `_stage_dubbing.py` 配音单元拟合：`fit_merge`/`fit_condense`（同说话人合并、

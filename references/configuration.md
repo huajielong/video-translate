@@ -47,6 +47,7 @@
 | `voice_autorate` | `false` | `true` 时用 Rubberband 改变音频语速；声音优先默认关闭，TTS 原速 |
 | `video_autorate` | `true` | 用视频片段 PTS 吸收音频长度差，保持音频原速；默认开启 |
 | `max_video_pts_rate` | `1.5` | 视频慢速封顶；配合 `video_autorate`，避免极端慢动作 |
+| `max_video_speedup_rate` | `1.25` | 音频短于槽位时，最多把视频加快多少来收紧句间空白 |
 | `max_audio_speed_rate` | `1.0` | 音频加速上限；音频原速默认 1.0 |
 | `max_audio_slow_rate` | `1.0` | 音频放慢上限；音频原速默认 1.0 |
 | `resegment` | `true` | 翻译前合并源碎句、翻译后按句子边界重切 |
