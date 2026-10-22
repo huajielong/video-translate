@@ -143,9 +143,21 @@ def pvt_python(cfg: dict) -> Path:
 def itt_python(cfg: dict) -> Path:
     venv = Path(cfg["index_tts2_home"]) / "venv"
     if IS_WINDOWS:
-        # uv on Windows creates venv/Scripts/python.exe; older packages used
-        # venv/python.exe. Accept either layout.
-        for rel in ("python.exe", "Scripts/python.exe"):
+        # Prefer the *base* pythonw over venv\Scripts\pythonw.exe: the latter
+        # is a uv launcher that starts the real python.exe as a child, and that
+        # child creates its own conhost (a flashing black window).  The venv's
+        # site-packages are added to PYTHONPATH in _index_env.
+        pyvenv = venv / "pyvenv.cfg"
+        if pyvenv.is_file():
+            for line in pyvenv.read_text(encoding="utf-8", errors="replace").splitlines():
+                key, _, value = line.partition("=")
+                if key.strip().lower() == "home" and value.strip():
+                    base = Path(value.strip()) / "pythonw.exe"
+                    if base.is_file():
+                        return base
+                    break
+        for rel in ("pythonw.exe", "Scripts/pythonw.exe",
+                    "python.exe", "Scripts/python.exe"):
             if (venv / rel).exists():
                 return venv / rel
         return venv / "Scripts/python.exe"
@@ -388,6 +400,14 @@ def _popen_kwargs() -> dict:
 def _index_env(cfg: dict) -> dict:
     """Env for the IndexTTS2 API/shim: torch thread count for the daemon."""
     e = env(cfg)
+    if IS_WINDOWS:
+        # The daemon is started from the base pythonw (see spawn_daemon), so
+        # its venv site-packages must be supplied explicitly.
+        site = Path(cfg["index_tts2_home"]) / "venv" / "Lib" / "site-packages"
+        if site.is_dir():
+            prev = e.get("PYTHONPATH", "")
+            if str(site) not in prev.split(os.pathsep):
+                e["PYTHONPATH"] = str(site) + (os.pathsep + prev if prev else "")
     threads = str(cfg.get("index_threads", 0) or "")
     if threads:
         # Only OpenMP: forcing MKL/NumExpr to the same count made small GEMMs

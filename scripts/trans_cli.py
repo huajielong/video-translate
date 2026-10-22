@@ -1975,11 +1975,23 @@ def cmd_run(args) -> int:
     outdir = resolve_outdir(home, input_path, args.outdir, args.overwrite)
 
     # ---- build upstream command
-    # --no-sync: the venv is already provisioned by setup; without it uv
-    # re-resolves the project on every task and can fail on a flaky GitHub
-    # fetch (e.g. chatterbox-tts), aborting an otherwise healthy dub.
-    cmd = [uv_bin(), "run", "--no-sync", "cli.py", "--task", task,
-           "--name", str(input_path), "--output-dir", str(outdir)]
+    # Prefer the provisioned venv interpreter over `uv run`: uv is another
+    # console-subsystem launcher between us and cli.py, and can flash a window
+    # when the parent has no console.  --no-sync already means "venv is ready".
+    venv_py = None
+    for rel in (Path(".venv") / "Scripts" / "pythonw.exe",
+                Path(".venv") / "Scripts" / "python.exe",
+                Path(".venv") / "bin" / "python"):
+        cand = home / rel
+        if cand.is_file():
+            venv_py = cand
+            break
+    if venv_py:
+        cmd = [str(venv_py), "cli.py", "--task", task,
+               "--name", str(input_path), "--output-dir", str(outdir)]
+    else:
+        cmd = [uv_bin(), "run", "--no-sync", "cli.py", "--task", task,
+               "--name", str(input_path), "--output-dir", str(outdir)]
 
     if task in ("vtv", "stt"):
         cmd += ["--model_name", args.asr_model]
