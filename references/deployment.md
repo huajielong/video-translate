@@ -11,6 +11,28 @@
 | Python | 3.10+（`pipeline.py` 仅标准库；venv 由 uv 创建） |
 | 网络 | PyPI 镜像/代理；Hugging Face/ModelScope 可访问 |
 
+## Windows 无控制台启动（重要）
+
+从 Agent、编辑器或计划任务启动时，父进程没有控制台，Windows 会给控制台子进程新建窗口。
+本项目分三层处理：
+
+1. **入口**用 `pythonw scripts/pipeline.pyw`（GUI 子系统，不分配控制台）。
+2. **所有 Python 子进程优先 base `pythonw`**：读 `venv/pyvenv.cfg` 的 `home`，
+   用 `home\pythonw.exe`；venv 的 `site-packages` 通过 `PYTHONPATH` 传入
+   （`_index_env` 与 `VTV_ITT_SITE`）。**不要**用 `venv\Scripts\pythonw.exe`：
+   它是 uv launcher，会再启动 `uv\python\...\python.exe`，后者创建 `conhost`
+   （空标题、一闪而过的黑窗）。
+3. **不调用 `.cmd`**：`indextts2.cmd` 内部会启动 `powershell` / `where`，孙进程
+   可能闪窗。stop 统一改为 `pythonw + scripts/indextts2.py stop --json`。
+   `scripts/_winhide.py` 和 `_winhide_site/sitecustomize.py` 给所有 `Popen` 默认加
+   `CREATE_NO_WINDOW`；只对显式 `DETACHED_PROCESS` / `CREATE_NEW_CONSOLE` 放行。
+
+纯 `pythonw` 下 `sys.stdout` 为 `None`，`pipeline.py` / `trans_cli.py` 会把进度和
+traceback 写到 `.runtime/logs/entry.log` / `trans_cli.log`。
+
+排查：任务运行时看 `conhost.exe` 的父进程；正常不应有由 `pythonw` 创建的 conhost。
+`serve` 后 API/shim/daemon 三条命令都应是 `uv\python\...\pythonw.exe`。
+
 ## 分发
 
 > `vendor/index-tts2-cli` 是运行时副本，不是第二个技能：保留 `scripts/`、`indextts/`、`references/`，已移除其独立的 `SKILL.md` / `CLAUDE.md`，避免出现第二个技能入口。需要单独使用 TTS 时请安装 `index-tts2-cli` 技能本身。
@@ -77,9 +99,18 @@ python scripts/pipeline.py setup \
   - `_stage_dubbing.py` 按时间重叠配对、逐行缓存、每视频固定参考（`clone_fixed.wav`）
   - `_stage_dubbing.py` 配音单元拟合：`fit_merge`/`fit_condense`（同说话人合并、
     实际缓存时长判断、DeepSeek 压缩、术语保护、`thinking=disabled`）；
-    `line` 模式额外用 CAMPPlus 聚类做同说话人合并键
-  - `scripts/trans_cli.py` 任务统一 `uv run --no-sync`，避免每次解析 GitHub 依赖
-  - `scripts/pipeline.py` 旁路字幕导入、两遍 loudnorm、按源时长 `-t` 裁剪
+    `line` 模式额外用 CAMPPlus 聚类做同说话人合并键；聚类子进程需要
+    `VTV_ITT_SITE`（IndexTTS2 venv 的 `site-packages`），否则 `rc=1`、0 合并
+  - `_stage_dubbing.py` / `tts/_index.py` 重启 daemon 时直接调用
+    `pythonw + scripts/indextts2.py stop --json`，不经过 `indextts2.cmd`
+  - `scripts/trans_cli.py` 任务优先直接用 pyVideoTrans venv 的 `pythonw.exe`（fallback
+    `uv run --no-sync`），并注入 `_winhide_site` 的 `PYTHONPATH`
+  - `scripts/pipeline.py` / `trans_cli.py` 入口 `pythonw`、base pythonw 选择、
+    `VTV_ITT_SITE`、旁路字幕导入、两遍 loudnorm、按源时长 `-t` 裁剪
+  - `scripts/pipeline.pyw` 无窗口入口；`scripts/_winhide.py` + `_winhide_site`
+    统一 `CREATE_NO_WINDOW`；`scripts/gpu_lock_task.pyw` 替代 `.cmd`
+  - `index-tts2-cli/scripts/itts/cli_net.py` `spawn_daemon` 用 base pythonw
+    （`pyvenv.cfg` 的 `home`），避免 venv launcher 的 conhost
   - `_stage_translate.py` / `translate_srt.py` 超长块拆分
   - `_srt_wrap.py` 平衡两行、术语不拆
   - `_qwenttslocal.py` 纯 clone 只要求 Base
@@ -90,5 +121,6 @@ python scripts/pipeline.py setup \
   - `index-tts2-cli/indextts/infer_v2.py` probe 字段、`INDEXTTS2_DIFFUSION_STEPS`
   - `index-tts2-cli/scripts/itts/srv.py` daemon 启动自绑定（High + `0xFFFF`）
 
-> `pipeline.py serve --stop` 只停 API 和 shim，**不会停 IndexTTS2 守护进程**。需要彻底释放显存/换新进程时执行
-> `vendor/index-tts2-cli/venv/Scripts/python.exe vendor/index-tts2-cli/scripts/indextts2.py stop --force`。
+> `pipeline.py serve --stop` 只停 API 和 shim；daemon 通常随后 idle 退出。若仍占用显存，
+> 执行 `vendor/index-tts2-cli/venv/Scripts/python.exe vendor/index-tts2-cli/scripts/indextts2.py stop --force`。
+> 在 Agent 场景优先用 `pipeline.py serve --stop`，避免这条命令的控制台窗口。

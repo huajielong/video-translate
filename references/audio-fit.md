@@ -31,6 +31,19 @@ IndexTTS2 **每句有固定开销**（中文实测约 `1.3s + 0.123s/汉字`）�
 - 合并后共用一次固定开销；时间轴取第一句开始到第二句结束，槽位自然变长。
 - 不同说话人、间隔大的停顿、`line_roles` 指定了逐行音色的行都不合并。
 
+**聚类是 `line` 模式合并的前提。** 逐句参考路径不同，只有 CAMPPlus 聚类给出
+`_fit_speaker` 后，`fit_merge` 才有可用的“同说话人”键。聚类子进程用 base
+pythonw，必须通过 `VTV_ITT_SITE=venv\Lib\site-packages` 拿到 torch/campplus。
+缺失时日志会出现：
+
+```text
+speaker clustering failed rc=1
+[fit] merge 78 -> 78 lines (0 merges)
+```
+
+成品块数会接近 prep 原始块数（例如 80 → 78），而不是合并后的 57 左右。确认
+`VTV_ITT_SITE` 指向 IndexTTS2 venv 的 `site-packages` 后重跑 `dub`。
+
 ### 2. `fit_condense`：只压缩仍然超速的句子
 
 - 触发：合并后的“时长/槽位” > `fit_condense_speed`（默认 1.25×）。
@@ -83,10 +96,12 @@ IndexTTS2 **每句有固定开销**（中文实测约 `1.3s + 0.123s/汉字`）�
 
 环境变量：`VTV_FIT_MERGE`、`VTV_FIT_CONDENSE`、`VTV_FIT_FORCE`、
 `VTV_FIT_MAX_SPEED`、`VTV_FIT_MAX_CHARS`、`VTV_FIT_GAP_MS`、`VTV_FIT_PRED_A`、
-`VTV_FIT_PRED_B`、`VTV_FIT_CONDENSE_SPEED`、`VTV_GLOSSARY_FILE`。
+`VTV_FIT_PRED_B`、`VTV_FIT_CONDENSE_SPEED`、`VTV_GLOSSARY_FILE`、
+`VTV_ITT_SITE`（聚类用的 IndexTTS2 `site-packages`）。
 
 实现位置：`vendor/pyvideotrans/videotrans/task/_stage_dubbing.py` 的
-`_fit_merge_queue`、`_fit_condense_queue`、`_fit_cached_ms`、`_fit_glossary_terms`。
+`_cluster_refs`、`_fit_merge_queue`、`_fit_condense_queue`、`_fit_cached_ms`、
+`_fit_glossary_terms`。
 
 ## 标定预测模型
 

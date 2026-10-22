@@ -16,6 +16,8 @@ description: Translates and dubs videos into another language while cloning the 
 3. **SRT 不要放在成品 MP4 旁边。** 播放器会自动加载同名 SRT，叠加硬字幕形成“两层字幕”；本流水线统一放到 `<out>/_字幕/`。
 4. **IndexTTS2 是单 worker。** 不要并发请求同一守护进程；`serve` 启动的桥接会按 `index_restart_every` 自动重启守护进程，不要再手动重启。
 5. **优先改配置，不改 vendor。** 换后端/语言/字幕模式用 CLI 参数或 `config.json`；升级上游后本项目补丁需重新应用，见 `references/deployment.md`。
+6. **Windows 后台用 `pythonw scripts/pipeline.pyw`，不要调用 `.cmd` 或 venv 的 `pythonw.exe` launcher。**
+   两者都会再拉起 `python.exe` / `conhost`，闪黑窗；进程模型与修复见 `references/deployment.md`。
 
 ## 最短路径
 
@@ -47,6 +49,8 @@ Windows 后台/Agent 运行用 `pythonw scripts/pipeline.pyw <command>`：解释
 | 配音忽快忽慢、短句被加速、句间停顿、`fit_*` 标定 | `references/audio-fit.md` |
 | 首次安装、迁移新机器、端口与安全 | `references/deployment.md` |
 | 报错、两层字幕、CUDA_FATAL | `references/troubleshooting.md` |
+| Windows 弹黑窗、conhost、`.cmd`、进程模型 | `references/deployment.md` |
+| `fit_merge` 合并 0 次、块数暴增、聚类失败 | `references/audio-fit.md` |
 | GPU 锁频、TTS 越跑越慢、CPU 降频、电池 | `references/performance.md` |
 | 换翻译/TTS 渠道、查渠道编号 | `references/channels.md` |
 | 换语言、查默认音色 | `references/languages.md` |
@@ -64,4 +68,6 @@ IndexTTS2 服务本身的 API/音色/情感文档在 `vendor/index-tts2-cli/refe
 视频旁有 `.en-us.vtt` / `.en.vtt` / `.en.srt` 时直接导入，跳过 ASR（`sidecar_subs=true`）。
 默认 **quality_merge**：`clone_ref_mode=line` + beam 3 + 扩散 25 + 放慢 1.05 +
 自然停顿 600ms + `fit_merge`/`fit_condense`；细节与标定见 `references/audio-fit.md`。
+Windows 上 API/shim/daemon 统一用 base `pythonw`，venv 的 `site-packages` 走
+`PYTHONPATH`；`fit_merge` 依赖 CAMPPlus 聚类，聚类失败会 0 合并、块数暴增。
 

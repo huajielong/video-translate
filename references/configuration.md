@@ -98,7 +98,7 @@
 | `INDEXTTS2_FAST` | `serve` 由 `index_fast` 设置；`1` = beam 1 |
 | `INDEXTTS2_RESTART_EVERY` | `serve` 由 `index_restart_every` 设置 |
 | `INDEXTTS2_API` | `serve` 传给桥接的 API 地址 |
-| `INDEXTTS2_CLI` / `SHIM_PORT` | `serve` 传给桥接的 CLI 路径/端口 |
+| `INDEXTTS2_CLI` / `SHIM_PORT` | `serve` 传给桥接的 CLI 路径/端口；stop 已优先走 `indextts2.py`，不再执行 `.cmd` |
 | `VTV_CLONE_REF_MODE` | `single` / `line` / `cluster`，对应 `clone_ref_mode` |
 | `VTV_SPK_MAX` / `VTV_SPK_THRESHOLD` | 说话人聚类参数，对应 `speaker_max` / `speaker_threshold` |
 | `VTV_SPK_MERGE_SIM` / `VTV_SPK_SELF_CONSISTENCY` | 小簇合并与单句噪声判据，对应 `speaker_merge_sim` / `speaker_self_consistency` |
@@ -114,7 +114,8 @@
 | `VTV_FIT_CONDENSE_SPEED` | 对应 `fit_condense_speed` |
 | `VTV_GLOSSARY_FILE` | 压缩改写时要求保留的术语表；`pipeline.py` 自动设为 `glossary` |
 | `VTV_PIN_DAEMON` | `1` 时把真 daemon 固定 P-core + High，对应 `pin_daemon` |
-| `VTV_ITT_PYTHON` | 聚类脚本使用的 IndexTTS2 Python（`pipeline.py` 自动设置） |
+| `VTV_ITT_PYTHON` | IndexTTS2 的 base `pythonw`（`pipeline.py` 自动设置；无控制台） |
+| `VTV_ITT_SITE` | IndexTTS2 venv 的 `Lib\site-packages`；聚类子进程靠它导入 torch/campplus |
 | `HF_ENDPOINT` | 强制 Hugging Face 镜像，如 `https://hf-mirror.com` |
 | `TRANS_ASR_MODEL` | 覆盖 `trans_cli.py` 的默认 ASR 模型 |
 | `HTTPS_PROXY` / `--proxy` | 依赖下载与模型下载的代理 |

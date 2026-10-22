@@ -4,23 +4,32 @@
 
 **原因**：Windows 给每个控制台子系统子进程（`python.exe`、`uv.exe`、`ffmpeg.exe`、
 `cmd.exe` 跑 `.cmd`）分配新控制台窗口——只要父进程自己没有控制台。从编辑器/Agent
-驱动技能时就是这种情况；重定向 stdout/stderr 并不能阻止窗口。典型来源是 `serve`
-的 IndexTTS2 API、Gradio 桥接、每片 TTS 前的 `indextts2.cmd stop`、以及 API 内的
+驱动技能时就是这种情况；重定向 stdout/stderr 并不能阻止窗口。
+
+两个最容易漏掉的中间层：
+
+- `venv\Scripts\pythonw.exe` 是 uv launcher，它会再启动
+  `uv\python\...\python.exe`；**那个子进程**创建 `conhost`，就是空标题一闪而过的黑窗。
+- `indextts2.cmd` 内部会启动 `powershell` / `where`，孙进程同样可能闪窗。
+
+典型触发点：`serve` 的 API/shim、daemon 启动、每片 TTS 前的 daemon stop、API 里的
 ffmpeg 转码。
 
 **处理（本版本已改）**：
+- 入口用 `pythonw scripts/pipeline.pyw <command>`：解释器没有控制台，不会在启动时
+  分配窗口；纯 pythonw 下 `print` 输出到 `.runtime/logs/entry.log`。
+- API/shim/daemon 改用 **base `pythonw`**（`pyvenv.cfg` 的 `home`），venv 的
+  `site-packages` 通过 `PYTHONPATH`（`VTV_ITT_SITE`）传入；不再经过 venv launcher。
+- daemon stop 直接调用 `pythonw + scripts/indextts2.py stop --json`，不再经过
+  `indextts2.cmd`；`scripts/gpu_lock_task.pyw` 替代 `.cmd` 注册脚本。
 - `scripts/_winhide.py` 在入口进程内把 `subprocess.Popen` 默认加上
-  `CREATE_NO_WINDOW`；`pipeline.py`、`trans_cli.py`、`gradio_shim.py`、`qc.py`、
-  `tts_stability.py` 均调用。
-- `scripts/_winhide_site/sitecustomize.py` 通过 `PYTHONPATH` 注入 IndexTTS2 API
-  及其 Python 子进程，覆盖 API 内部的 ffmpeg 调用。
-- 刻意使用 `DETACHED_PROCESS` / `CREATE_NEW_CONSOLE` 的调用保持原样（Windows
-  不允许与 `CREATE_NO_WINDOW` 组合）。
-- 要连“一瞬间”都没有：用 `pythonw scripts/pipeline.pyw <command>` 启动。`pythonw`
-  没有控制台，Windows 不会在解释器启动时分配窗口；纯 pythonw 下 `print` 输出到
-  `.runtime/logs/entry.log`。
-- 若仍有窗口，说明是技能之外的旧进程：`pipeline.py serve --stop` 后重新 `serve`；
-  检查是否有旧版 `gradio_shim.py` / `indextts2` 仍在运行。
+  `CREATE_NO_WINDOW`；`_winhide_site/sitecustomize.py` 通过 `PYTHONPATH` 覆盖
+  Python 孙进程（含 API 内的 ffmpeg）。刻意使用 `DETACHED_PROCESS` /
+  `CREATE_NEW_CONSOLE` 的调用保持原样。
+- 验证：`serve` 后 API/shim/daemon 三条命令都应是 `uv\python\...\pythonw.exe`，
+  且由它们创建的 `conhost.exe` 为 0。若仍有窗口，说明是修复前的旧进程：
+  `pipeline.py serve --stop` 后重新 `serve`。
+- 完整进程模型见 `deployment.md`。
 
 ## 成品有两层字幕
 
