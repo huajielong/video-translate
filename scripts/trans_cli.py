@@ -2034,6 +2034,15 @@ def cmd_run(args) -> int:
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUNBUFFERED", "1")
+    if os.name == "nt":
+        # pyVideoTrans is a separate Python process; make it load the hidden
+        # subprocess shim too, so its `indextts2.cmd stop` cannot flash a cmd
+        # window (the parent's Popen patch does not cross process boundaries).
+        site = SCRIPT_DIR / "_winhide_site"
+        if site.is_dir():
+            prev = env.get("PYTHONPATH", "")
+            if str(site) not in prev.split(os.pathsep):
+                env["PYTHONPATH"] = str(site) + (os.pathsep + prev if prev else "")
 
     # Expose provisioned tools to the child (cache-first; nothing is downloaded here).
     tool_paths = []
