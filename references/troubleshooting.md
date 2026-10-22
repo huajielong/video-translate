@@ -16,6 +16,9 @@ ffmpeg 转码。
   及其 Python 子进程，覆盖 API 内部的 ffmpeg 调用。
 - 刻意使用 `DETACHED_PROCESS` / `CREATE_NEW_CONSOLE` 的调用保持原样（Windows
   不允许与 `CREATE_NO_WINDOW` 组合）。
+- 要连“一瞬间”都没有：用 `pythonw scripts/pipeline.pyw <command>` 启动。`pythonw`
+  没有控制台，Windows 不会在解释器启动时分配窗口；纯 pythonw 下 `print` 输出到
+  `.runtime/logs/entry.log`。
 - 若仍有窗口，说明是技能之外的旧进程：`pipeline.py serve --stop` 后重新 `serve`；
   检查是否有旧版 `gradio_shim.py` / `indextts2` 仍在运行。
 

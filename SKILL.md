@@ -31,6 +31,9 @@ python scripts/pipeline.py report --out "D:/translated"   # 汇总 QC 到 <out>/
 产物：`<out>/<原名><final_suffix>.mp4`、`<out>/_字幕/<原名>.{源,目标}.srt`、`<out>/QC_SUMMARY.md`。
 中途失败直接重跑同一命令；已完成的阶段和逐句配音会命中缓存。
 
+Windows 后台/Agent 运行用 `pythonw scripts/pipeline.pyw <command>`：解释器没有控制台，
+不会闪 cmd 窗口；没有 stdout 时进度写到 `.runtime/logs/entry.log`。
+
 ## 按需阅读
 
 **只读当前任务需要的那一份，不要预读整个 `references/`。**

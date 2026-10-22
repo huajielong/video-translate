@@ -77,11 +77,13 @@ VERSION = "1.3.0"
 #         <skill>/tools                 (provisioned, untracked)
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
-from _winhide import hide_console_windows  # noqa: E402
+from _winhide import ensure_stdio, hide_console_windows  # noqa: E402
 
 hide_console_windows()
 
 SKILL_DIR = SCRIPT_DIR.parent
+
+ensure_stdio(SKILL_DIR / ".runtime" / "logs" / "trans_cli.log")
 BUNDLED_HOME = SKILL_DIR / "vendor" / "pyvideotrans"
 
 # Provisioned tools and download cache (cache-first: never re-download what is here).

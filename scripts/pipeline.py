@@ -27,7 +27,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _winhide import hide_console_windows  # noqa: E402
+from _winhide import ensure_stdio, hide_console_windows  # noqa: E402
 
 hide_console_windows()
 
@@ -47,6 +47,9 @@ QC = SCRIPTS / "qc.py"
 POLISH = SCRIPTS / "polish_srt.py"
 REPORT = SCRIPTS / "make_report.py"
 IS_WINDOWS = platform.system().lower() == "windows"
+
+# pythonw.exe has no console; send progress and tracebacks to a file.
+ensure_stdio(LOGS / "entry.log")
 
 DEFAULTS = {
     "pyvideotrans_home": "vendor/pyvideotrans",

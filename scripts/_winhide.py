@@ -16,8 +16,27 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
+from pathlib import Path
 
 _applied = False
+
+
+def ensure_stdio(log_path: str | Path) -> None:
+    """Give pythonw.exe a stdout/stderr; it starts with both set to None.
+
+    Without this every ``print`` raises AttributeError under pythonw.  When the
+    process does have a console (normal ``python`` launch) this is a no-op.
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    path = Path(log_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stream = open(path, "a", encoding="utf-8", buffering=1)
+    if sys.stdout is None:
+        sys.stdout = stream
+    if sys.stderr is None:
+        sys.stderr = stream
 
 
 def hide_own_console() -> None:

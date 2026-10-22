@@ -2,6 +2,11 @@
 
 入口：`python scripts/pipeline.py <command>`。所有参数都可用 `--help` 查看；本页只记录语义与易错点。
 
+Windows 上从 Agent、编辑器或计划任务（父进程没有控制台）运行时，用
+`pythonw scripts/pipeline.pyw <command>`：`pythonw` 没有控制台，不会创建/闪烁 cmd 窗口；
+没有 stdout 时进度与 traceback 写到 `.runtime/logs/entry.log`。从自己的终端运行仍可用
+`python scripts/pipeline.py`，输出直接显示在终端。
+
 ## 命令
 
 | 命令 | 作用 | 必需的参数 | 说明 |
