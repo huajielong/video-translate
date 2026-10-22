@@ -72,10 +72,14 @@ python scripts/pipeline.py setup \
 - 替换 `vendor/pyvideotrans` 或 `vendor/index-tts2-cli` 后，重新跑 `setup`（依赖/模型已缓存则秒回）。
 - 本项目对 vendor 的补丁见 `references/quality.md`、`references/pipeline.md`、
   `references/audio-fit.md`；升级上游后需重新应用：
-  - `_rate.py` concat 强制 48k/2ch；音频-only 短句放慢填缝、第一句不吞片头
+  - `_rate.py` concat 强制 48k/2ch；音频-only 选择性放慢填缝（自然停顿 600ms、
+    放慢上限 1.05）、第一句不吞片头
   - `_stage_dubbing.py` 按时间重叠配对、逐行缓存、每视频固定参考（`clone_fixed.wav`）
   - `_stage_dubbing.py` 配音单元拟合：`fit_merge`/`fit_condense`（同说话人合并、
-    实际缓存时长判断、DeepSeek 压缩、术语保护、`thinking=disabled`）
+    实际缓存时长判断、DeepSeek 压缩、术语保护、`thinking=disabled`）；
+    `line` 模式额外用 CAMPPlus 聚类做同说话人合并键
+  - `scripts/trans_cli.py` 任务统一 `uv run --no-sync`，避免每次解析 GitHub 依赖
+  - `scripts/pipeline.py` 旁路字幕导入、两遍 loudnorm、按源时长 `-t` 裁剪
   - `_stage_translate.py` / `translate_srt.py` 超长块拆分
   - `_srt_wrap.py` 平衡两行、术语不拆
   - `_qwenttslocal.py` 纯 clone 只要求 Base

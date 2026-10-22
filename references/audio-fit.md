@@ -24,7 +24,8 @@ IndexTTS2 **每句有固定开销**（中文实测约 `1.3s + 0.123s/汉字`）�
 
 ### 1. `fit_merge`：合并同一说话人的相邻短句
 
-- 条件：同一 `ref_wav`（同一说话人）、间隔 ≤`fit_gap_ms`（默认 500ms）、
+- 条件：同一说话人（`cluster`/`single` 用 `ref_wav`，`line` 用 CAMPPlus 聚类键）、
+  间隔 ≤`fit_gap_ms`（默认 500ms）、
   合并后 ≤`fit_max_chars`（默认 36）个汉字，且 `simple_wrap` 仍为 ≤2 行。
 - 优先合并最超速的句子（worst-first），避免紧邻的好句被先吃掉。
 - 合并后共用一次固定开销；时间轴取第一句开始到第二句结束，槽位自然变长。
@@ -44,8 +45,10 @@ IndexTTS2 **每句有固定开销**（中文实测约 `1.3s + 0.123s/汉字`）�
 
 ### 3. 音频填缝（已有逻辑）
 
-- 配音短于槽位：最多放慢 `max_audio_slow_rate`（默认 1.2），但每句至少保留
-  `dubb_min_pause_ms`（默认 200ms）停顿；再短的差值是静音。
+- 配音短于槽位：**空档 ≤`dubb_natural_pause_ms`（默认 600ms）时保持原速**，
+  不为了填满而放慢；只有空档超过它，才最多放慢 `max_audio_slow_rate`（默认 1.05），
+  把空档压到 natural 附近。`dubb_min_pause_ms`（默认 200ms）是底线。
+  旧逻辑会把每条短句都放慢到只剩 200ms，听感整体拖沓。
 - 配音长于槽位：Rubberband 保音色加速，`max_audio_speed_rate`（默认 2.5）只是兜底。
 - 第一句不再把片头 4–5 秒算进自己的槽位。
 
@@ -64,12 +67,19 @@ IndexTTS2 **每句有固定开销**（中文实测约 `1.3s + 0.123s/汉字`）�
   "fit_pred_a": 1.30,
   "fit_pred_b": 0.123,
   "fit_condense_speed": 1.25,
-  "max_audio_slow_rate": 1.2,
+  "clone_ref_mode": "line",
+  "index_fast": false,
+  "index_diffusion_steps": 25,
+  "max_audio_slow_rate": 1.05,
   "dubb_min_pause_ms": 200,
+  "dubb_natural_pause_ms": 600,
   "voice_autorate": true,
   "video_autorate": false
 }
 ```
+
+这是默认的 **quality_merge** 预设：逐句参考保留情感、beam 3、扩散 25 步、
+只放慢 5%、自然停顿 600ms；比 beam1/15 的快速配置慢约 17%。
 
 环境变量：`VTV_FIT_MERGE`、`VTV_FIT_CONDENSE`、`VTV_FIT_FORCE`、
 `VTV_FIT_MAX_SPEED`、`VTV_FIT_MAX_CHARS`、`VTV_FIT_GAP_MS`、`VTV_FIT_PRED_A`、
@@ -102,7 +112,7 @@ audio_seconds ≈ fit_pred_a + fit_pred_b × 汉字数
 | 目标语言 `zh*`、IndexTTS2、硬/软字幕 | 生效 |
 | 双语字幕（`dual-hard`/`dual-soft`） | **不生效**：源/目标行数必须配对 |
 | `clone_ref_mode=cluster` 多说话人 | 生效，只合并同一参考的行 |
-| `clone_ref_mode=line` | 每行参考不同，基本不会合并 |
+| `clone_ref_mode=line` | 生效：逐句参考保留情感，另用 CAMPPlus 聚类做同说话人合并键 |
 | 非中文 / 非 IndexTTS2 | 默认不启用；重新标定预测模型后设 `fit_force=true` |
 | 字幕条数 | 会减少（002 232→199），每条仍 ≤2 行 |
 
@@ -128,6 +138,36 @@ audio_seconds ≈ fit_pred_a + fit_pred_b × 汉字数
 - 只有“纯幻灯片/录屏、没有口型、文字已定稿、必须保持总时长”才考虑修 A。
 - 全片统一微慢（1.03–1.05×）是另一个可选旋钮；合并已经够用时不要开，
   否则槽位一起变长、停顿可能增加。
+
+## 质量优先预设（quality_merge）
+
+默认配置就是这一组：
+
+```jsonc
+{
+  "clone_ref_mode": "line",
+  "index_fast": false,
+  "index_diffusion_steps": 25,
+  "max_audio_slow_rate": 1.05,
+  "dubb_natural_pause_ms": 600
+}
+```
+
+vLLM 001 实测（214.48s）：
+
+| 指标 | quality_merge |
+|---|---:|
+| 实际语速 | 0.95–1.23×，中位 1.00× |
+| >1.5× 句子 | 0 |
+| 字幕块数 | 57，≤2 行 |
+| 静音 / 最长静音 | 26.9s / 1.47s |
+| F0 中位 / IQR | 110.7 Hz / 30.4（10.20 为 111.3 / 31.1） |
+| 时长差 / 响度 | 0.000s / -18.0 LUFS |
+| TTS 耗时 | 398s（v1 快速配置 339s，约 +17%） |
+
+代价是 TTS 更慢、逐句参考的音色一致性略低于 cluster 单参考；如果只要速度，
+可设 `clone_ref_mode=cluster`、`index_fast=true`、`index_diffusion_steps=15`，
+但会出现语速拖沓/情感偏平。
 
 ## 常见问题
 

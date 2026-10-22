@@ -57,17 +57,21 @@ IndexTTS2 服务本身的 API/音色/情感文档在 `vendor/index-tts2-cli/refe
 
 `index` 克隆后端、硬字幕、`en → zh-cn`、`mt_workers=4`、AAC 48 kHz、-18 LUFS、
 术语表 `assets/glossary.txt`。语言不写死：`--source` / `--target` / `--glossary` 均可配置。
-默认开启 `fit_merge` + `fit_condense`：先合并同说话人短句，再压缩仍超速的句子，
-避免短句被加速 2–3×；002 实测最大加速 2.75×→1.44×、>1.5× 由 21 句降到 0。
-详见 `references/audio-fit.md`；换后端/音色后用 `scripts/fit_calibrate.py` 重标定。
+视频旁有 `.en-us.vtt` / `.en.vtt` / `.en.srt` 时直接导入，跳过 ASR（`sidecar_subs=true`）。
+默认是 **quality_merge** 质量预设：`clone_ref_mode=line`（逐句参考保留情感，
+聚类只做同说话人合并）+ beam 3 + 扩散 25 步 + 放慢上限 1.05 + 自然停顿 600ms。
+`fit_merge` + `fit_condense` 先合并同说话人短句，再压缩仍超速的句子；
+002 实测最大加速 2.75×→1.44×、>1.5× 由 21 句降到 0。质量预设比 beam1/15
+快配置慢约 17%。详见 `references/audio-fit.md`；换后端/音色后用
+`scripts/fit_calibrate.py` 重标定。
 
 ## 通用能力（已内置）
 
 | 能力 | 入口 | 说明 |
 |---|---|---|
-| 克隆配音 | `--backend index` | IndexTTS2 零样本克隆；`clone_ref_mode=cluster` 按说话人共用参考 |
+| 克隆配音 | `--backend index` | IndexTTS2 零样本克隆；默认 `line` 逐句参考，聚类只做同说话人合并 |
 | 配音自然度 | `fit_merge` / `fit_condense` | 合并同说话人短句 + 压缩仍超速句；见 `audio-fit.md` |
-| 句间停顿 | `max_audio_slow_rate` / `dubb_min_pause_ms` | 短句放慢填缝，减少长静音 |
+| 句间停顿 | `max_audio_slow_rate` / `dubb_natural_pause_ms` | 保留自然停顿，只填长空档；默认 1.05/600ms |
 | TTS 稳定性 | `scripts/gpu_lock_task.cmd` / `scripts/tts_stability.py` | GPU 锁频、probe、逐句稳定性基准 |
 | 断点续跑 | `prep` / `dub` / `post` / `status` | 阶段状态 + 逐行 `DUBBING_CACHE` |
 | 质检 | `qc` / `report` | 时长、响度、字幕行数、术语命中 |

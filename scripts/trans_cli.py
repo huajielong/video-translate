@@ -1968,7 +1968,10 @@ def cmd_run(args) -> int:
     outdir = resolve_outdir(home, input_path, args.outdir, args.overwrite)
 
     # ---- build upstream command
-    cmd = [uv_bin(), "run", "cli.py", "--task", task,
+    # --no-sync: the venv is already provisioned by setup; without it uv
+    # re-resolves the project on every task and can fail on a flaky GitHub
+    # fetch (e.g. chatterbox-tts), aborting an otherwise healthy dub.
+    cmd = [uv_bin(), "run", "--no-sync", "cli.py", "--task", task,
            "--name", str(input_path), "--output-dir", str(outdir)]
 
     if task in ("vtv", "stt"):

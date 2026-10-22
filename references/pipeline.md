@@ -5,26 +5,27 @@
 ```text
 源视频
   │
-  ├─ prep: ASR (faster-whisper large-v3-turbo) → en.srt
+  ├─ prep: ASR (faster-whisper large-v3-turbo) 或旁路字幕（.en-us.vtt/.en.vtt/.en.srt）→ en.srt
   │        MT  (DeepSeek + glossary + context) → zh-cn.srt（超长块拆分）
   │
   ├─ dub: vtv --no-clear-cache（预置 en.srt / zh-cn.srt，跳过 ASR/MT）
   │        prepare: 提取视频/音频、可选人声分离
-  │        refs: 逐句裁剪参考音频 + 说话人聚类
+  │        refs: 逐句参考 + CAMPPlus 聚类（line 保留逐句 ref，聚类只做合并键）
   │        fit: 合并同说话人短句 + 压缩仍超速句（TTS 前，只改文本/时间）
-  │        tts: IndexTTS2 克隆
+  │        tts: IndexTTS2 克隆（默认 beam 3 / 扩散 25）
   │        align: Rubberband 保音色变速 + 字幕重定时
   │        assembling: 硬/软字幕 + 音轨合成
   │
-  └─ post: loudnorm -18 LUFS / 48 kHz → QC → 原子替换
+  └─ post: 两遍 loudnorm -18 LUFS / 48 kHz → 按源时长裁剪 → QC → 原子替换
 ```
 
 ## 配音单元拟合（fit）
 
 `dub` 内部、说话人聚类之后、TTS 之前：
 
-- `fit_merge`：同一参考音色（同一说话人）、间隔 ≤500ms 的相邻短句，合并后 ≤36 字
-  且仍能两行显示，就合并成一个配音单元；优先合并最超速的句子。
+- `fit_merge`：同一说话人（`cluster`/`single` 用参考路径，`line` 用 CAMPPlus
+  聚类键）、间隔 ≤500ms 的相邻短句，合并后 ≤36 字且仍能两行显示，就合并成
+  一个配音单元；优先合并最超速的句子。
 - `fit_condense`：合并后仍 >1.25× 的句子，用 DeepSeek 压到约 1.12×；
   术语/英文技术词丢失则拒绝。重跑时优先用 `DUBBING_CACHE` 的真实音频时长判断。
 - 合并/压缩只改目标文本与字幕条数，不改视频、不切视频；`video_autorate` 仍关闭。

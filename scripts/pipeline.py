@@ -18,6 +18,7 @@ import concurrent.futures as cf
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -56,18 +57,22 @@ DEFAULTS = {
     "translate_channel": "deepseek",
     "deepseek_model": "deepseek-flash",
     "asr_model": "large-v3-turbo",
+    # 源视频旁有 .en-us.vtt / .en.vtt / .en.srt 时直接导入，跳过 ASR
+    "sidecar_subs": True,
     "index_api": "http://127.0.0.1:8791",
     "index_url": "http://127.0.0.1:7861",
     "index_api_port": 8791,
     "shim_port": 7861,
     "index_fast": False,
+    "index_diffusion_steps": 25,
     "index_restart_every": 0,
     "restart_before_tts": True,
     "pin_daemon": True,
     "probe": True,
     "daemon_affinity_mask": "0xFFFF",
     "gpu_lock_clock": 0,
-    "clone_ref_mode": "cluster",
+    # 质量优先：逐句参考保留情感，同时用说话人聚类做合并键
+    "clone_ref_mode": "line",
     "speaker_max": 0,
     "speaker_threshold": 0.72,
     "speaker_merge_sim": 0.80,
@@ -90,9 +95,11 @@ DEFAULTS = {
     "fit_pred_b": 0.123,
     "fit_condense_speed": 1.25,
     "max_audio_speed_rate": 2.5,
-    "max_audio_slow_rate": 1.2,
+    "max_audio_slow_rate": 1.05,
     "max_video_pts_rate": 1.5,
     "dubb_min_pause_ms": 200,
+    # 自然短停顿；只有超过它的空档才放慢填缝，避免每条短句都被拉慢
+    "dubb_natural_pause_ms": 600,
     "loudness": -18.0,
     "final_suffix": "",
     "glossary": "assets/glossary.txt",
@@ -167,6 +174,7 @@ def env(cfg: dict) -> dict:
     e["VTV_MAX_AUDIO_SLOW_RATE"] = str(cfg.get("max_audio_slow_rate", 1.2))
     e["VTV_MAX_VIDEO_PTS_RATE"] = str(cfg.get("max_video_pts_rate", 1.5))
     e["VTV_DUBB_MIN_PAUSE_MS"] = str(cfg.get("dubb_min_pause_ms", 200))
+    e["VTV_DUBB_NATURAL_PAUSE_MS"] = str(cfg.get("dubb_natural_pause_ms", 350))
     e["VTV_FIT_MERGE"] = "1" if cfg.get("fit_merge", True) else "0"
     e["VTV_FIT_CONDENSE"] = "1" if cfg.get("fit_condense", True) else "0"
     e["VTV_FIT_FORCE"] = "1" if cfg.get("fit_force", False) else "0"
@@ -624,12 +632,58 @@ def wrapper_cmd(cfg: dict, *args: str) -> list[str]:
     return [sys.executable, str(WRAPPER), *args, "--home", cfg["pyvideotrans_home"]]
 
 
+SIDECAR_SUFFIXES = (".en-us.vtt", ".en.vtt", ".en.srt", ".vtt", ".srt")
+
+
+def find_sidecar(src: Path) -> Path | None:
+    """Find an existing source-language subtitle next to the video."""
+    base = src.with_suffix("")
+    for suffix in SIDECAR_SUFFIXES:
+        candidate = Path(str(base) + suffix)
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def import_sidecar(side: Path, dest: Path, cfg: dict) -> bool:
+    """Convert a sidecar VTT/SRT to a clean UTF-8 SRT without ASR."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if side.suffix.lower() == ".srt":
+        raw = side.read_text(encoding="utf-8-sig", errors="replace")
+    else:
+        tmp = dest.with_name(dest.stem + ".sidecar.tmp.srt")
+        cp = subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", str(side),
+             "-c:s", "srt", str(tmp)],
+            env=env(cfg), capture_output=True, text=True,
+            encoding="utf-8", errors="replace")
+        if cp.returncode != 0 or not tmp.exists():
+            print(f"[prep] sidecar conversion failed: {(cp.stderr or '').strip()[:200]}")
+            tmp.unlink(missing_ok=True)
+            return False
+        raw = tmp.read_text(encoding="utf-8-sig", errors="replace")
+        tmp.unlink(missing_ok=True)
+    text = raw.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if "-->" not in text:
+        return False
+    dest.write_text(text + "\n", encoding="utf-8")
+    return True
+
+
 def asr_one(cfg: dict, stem: str, src: Path, force: bool = False) -> bool:
     p = paths(cfg, stem)
     en = p["prep"] / "en.srt"
     if en.exists() and not force:
         print(f"[prep] {stem}: ASR cached")
         return True
+    side = find_sidecar(src) if cfg.get("sidecar_subs", True) else None
+    if side:
+        if import_sidecar(side, en, cfg):
+            save_state(stem, asr=True, asr_source="sidecar")
+            print(f"[prep] {stem}: sidecar {side.name} -> {en}")
+            return True
+        print(f"[prep] {stem}: sidecar import failed; falling back to ASR")
     p["prep"].mkdir(parents=True, exist_ok=True)
     stt_dir = p["prep"] / "stt"
     shutil.rmtree(stt_dir, ignore_errors=True)
@@ -727,6 +781,36 @@ def dub_one(cfg: dict, stem: str, src: Path, force: bool = False) -> bool:
     return True
 
 
+def media_duration(path: Path, cfg: dict) -> float:
+    try:
+        cp = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nk=1:nw=1", str(path)],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=env(cfg))
+        return float((cp.stdout or "").strip())
+    except Exception:
+        return 0.0
+
+
+def measure_loudnorm(path: Path, cfg: dict, target: str) -> dict | None:
+    """First loudnorm pass: measure input loudness for a linear second pass."""
+    try:
+        cp = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-i", str(path), "-vn",
+             "-af", f"loudnorm={target}:print_format=json",
+             "-f", "null", "-"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=env(cfg))
+        text = (cp.stderr or "") + (cp.stdout or "")
+        m = re.search(r"\{\s*\"input_i\".*?\}", text, re.S)
+        if not m:
+            return None
+        return json.loads(m.group(0))
+    except Exception:
+        return None
+
+
 def post_one(cfg: dict, stem: str) -> bool:
     p = paths(cfg, stem)
     src_mp4 = p["dub"] / f"{stem}.mp4"
@@ -735,10 +819,28 @@ def post_one(cfg: dict, stem: str) -> bool:
         return False
     p["final"].parent.mkdir(parents=True, exist_ok=True)
     tmp = p["final"].with_suffix(".tmp.mp4")
-    rc = run(["ffmpeg", "-y", "-v", "error", "-i", str(src_mp4),
-              "-c:v", "copy", "-af", f"loudnorm=I={cfg.get('loudness', -18)}:TP=-1.5:LRA=11",
-              "-ar", "48000", "-c:a", "aac", "-b:a", "192k", str(tmp)],
-             cfg, p["log"])
+    source = Path(cfg["src_dir"]) / f"{stem}.mp4"
+    source_dur = media_duration(source, cfg) if source.exists() else 0.0
+    target = f"I={cfg.get('loudness', -18)}:TP=-1.5:LRA=11"
+    measured = measure_loudnorm(src_mp4, cfg, target)
+    af = f"loudnorm={target}"
+    if measured and measured.get("input_i") not in (None, "-inf", "inf"):
+        af = (f"loudnorm={target}"
+              f":measured_I={measured.get('input_i')}"
+              f":measured_TP={measured.get('input_tp')}"
+              f":measured_LRA={measured.get('input_lra')}"
+              f":measured_thresh={measured.get('input_thresh')}"
+              f":offset={measured.get('target_offset')}:linear=true")
+    cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(src_mp4),
+           "-c:v", "copy", "-af", af,
+           "-ar", "48000", "-c:a", "aac", "-b:a", "192k"]
+    # The dubbed audio can overrun the last slot when a line exceeds
+    # max_audio_speed_rate; trim the output to the source duration so the
+    # final video does not grow (QC duration diff / A/V drift).
+    if source_dur > 0:
+        cmd += ["-t", f"{source_dur:.3f}"]
+    cmd.append(str(tmp))
+    rc = run(cmd, cfg, p["log"])
     if rc != 0 or not tmp.exists():
         print(f"[post] {stem}: loudnorm failed rc={rc}")
         return False

@@ -22,18 +22,19 @@
 | `translate_channel` | `deepseek` | 翻译渠道名，见 `channels.md` |
 | `deepseek_model` | `deepseek-flash` | DeepSeek 模型名 |
 | `asr_model` | `large-v3-turbo` | Whisper 模型，见 `models.md` |
+| `sidecar_subs` | `true` | 视频旁有 `.en-us.vtt` / `.en.vtt` / `.en.srt` / `.vtt` 时直接导入，跳过 ASR |
 | `index_api` | `http://127.0.0.1:8791` | IndexTTS2 HTTP API |
 | `index_url` | `http://127.0.0.1:7861` | Gradio 桥接地址（pyVideoTrans 的 `index` 渠道） |
 | `index_api_port` | `8791` | `serve` 启动 API 时使用 |
 | `shim_port` | `7861` | `serve` 启动桥接时使用 |
-| `index_fast` | `false` | `true` 时 beam 3→1，快约 10–20%，韵律下降 |
+| `index_fast` | `false` | 默认质量优先（beam 3）；`true` 时 beam 3→1，快约 10–20%，韵律下降 |
 | `index_restart_every` | `0` | 每 N 句重启守护进程；GPU 锁频下 100 句无退化，保持 0；若未锁 GPU/仍退化，可设 25 或更小 |
 | `restart_before_tts` | `true` | prepare 后、TTS 前重启一次 daemon，避免 prepare 阶段把 GPU 带入慢状态 |
 | `pin_daemon` | `true` | 把真实 daemon 固定到 P-core（0–15）并设 High；daemon 启动时自绑定，客户端还会兜底 |
 | `probe` | `true` | daemon 把逐句耗时写入 `.runtime/logs/tts_probe.jsonl`；改完需重启 `serve` |
 | `daemon_affinity_mask` | `0xFFFF` | daemon 自绑定使用的 CPU 掩码；24 线程 i7-14650HX 的 P-core 0–15 |
 | `gpu_lock_clock` | `0` | 可选：非 0 时由**管理员权限的** `serve` 用 `nvidia-smi -lgc X,X` 锁 GPU 时钟；普通用户请用 `scripts/gpu_lock_task.cmd` 注册登录任务 |
-| `clone_ref_mode` | `cluster` | `single`=整片固定参考（最快，单人）；`line`=逐句参考（多人但慢）；`cluster`=按说话人聚类，每人一个参考 |
+| `clone_ref_mode` | `line` | 默认逐句参考保留情感；`fit_merge` 额外用 CAMPPlus 聚类只做“同说话人”合并键。`single`=整片固定参考（最快）；`cluster`=每人一个参考（音色最稳） |
 | `speaker_max` | `0` | 聚类最大说话人数；`0` = 自动 |
 | `speaker_threshold` | `0.72` | 聚类余弦相似度阈值；越高越容易分出更多说话人 |
 | `speaker_merge_sim` | `0.80` | 小簇与更大簇的质心相似度达到该值才合并；**不按句数合并** |
@@ -46,8 +47,9 @@
 | `video_autorate` | `false` | 传 `--video_autorate`，用视频慢速分担；**当前上游实现会丢片头/片尾，修好前不要开** |
 | `max_video_pts_rate` | `1.5` | 视频慢速封顶；配合 `video_autorate` |
 | `max_audio_speed_rate` | `30` | 配音长于字幕区间时最大加速倍率；越小越自然，但可能破坏同步 |
-| `max_audio_slow_rate` | `1.2` | 配音短于区间时允许的最大放慢倍率，用来填补句间空档；`1.0` 关闭 |
+| `max_audio_slow_rate` | `1.05` | 配音短于区间时允许的最大放慢倍率；默认只放慢 5%，避免整体拖沓；`1.0` 关闭 |
 | `dubb_min_pause_ms` | `200` | 每句结束至少保留的停顿毫秒数；放慢填缝不会低于该停顿 |
+| `dubb_natural_pause_ms` | `600` | 自然短停顿；空档不超过它时保持原速，超过才放慢填缝 |
 | `fit_merge` | `true` | 合并同说话人、时间相邻的短句，减少 IndexTTS2 固定开销导致的 2–3× 加速 |
 | `fit_condense` | `true` | 合并后仍超速的句子用 DeepSeek 压缩改写；需要 DeepSeek Key |
 | `fit_force` | `false` | `fit_*` 只对 IndexTTS2 自动启用；其他后端标定后设 `true` 强制 |
@@ -58,6 +60,8 @@
 | `fit_condense_speed` | `1.25` | 预测/实际时长比超过该值才触发压缩；避免过度改写 |
 | `loudness` | `-18.0` | 成品集成响度（LUFS） |
 
+> 默认是 **quality_merge** 预设：`line` 逐句参考 + beam 3 + 扩散 25 步 +
+> 放慢 1.05/自然停顿 600ms；比 beam1/15 的快速配置慢约 17%，换取更丰富的情感和更自然的语速。
 > `fit_*` 默认值只对中文 + IndexTTS2 标定；换后端/音色/语言后用
 > `python scripts/fit_calibrate.py --pid <daemon_pid>` 重新拟合，机制与边界见 `audio-fit.md`。
 | `final_suffix` | 空 | 成品文件名后缀，如 `_中文`；状态检查与输出路径共用 |
@@ -101,7 +105,7 @@
 | `VTV_RESTART_BEFORE_TTS` | `1` 时在 prepare 后重启 daemon，对应 `restart_before_tts` |
 | `VTV_DUBBING_CACHE` | 覆盖逐句配音缓存目录；A/B 或强制重新合成时指向空目录 |
 | `VTV_MAX_AUDIO_SPEED_RATE` / `VTV_MAX_AUDIO_SLOW_RATE` | 对应 `max_audio_speed_rate` / `max_audio_slow_rate` |
-| `VTV_DUBB_MIN_PAUSE_MS` | 对应 `dubb_min_pause_ms` |
+| `VTV_DUBB_MIN_PAUSE_MS` / `VTV_DUBB_NATURAL_PAUSE_MS` | 对应 `dubb_min_pause_ms` / `dubb_natural_pause_ms` |
 | `VTV_FIT_MERGE` / `VTV_FIT_CONDENSE` | `1`/`0`，对应 `fit_merge` / `fit_condense` |
 | `VTV_FIT_FORCE` | `1` 时非 IndexTTS2 也启用 fit（需先标定预测模型） |
 | `VTV_FIT_MAX_SPEED` / `VTV_FIT_MAX_CHARS` | 对应 `fit_max_speed` / `fit_max_chars` |
