@@ -212,6 +212,10 @@ def env(cfg: dict) -> dict:
         cfg.get("speaker_self_consistency", 0.55) or 0.55)
     try:
         e["VTV_ITT_PYTHON"] = str(itt_python(cfg))
+        # speaker_cluster.py runs on the base pythonw, so it needs the venv's
+        # site-packages explicitly (the base interpreter has none of torch).
+        e["VTV_ITT_SITE"] = str(
+            Path(cfg["index_tts2_home"]) / "venv" / "Lib" / "site-packages")
     except Exception:
         pass
     e.setdefault("PYTHONUTF8", "1")
