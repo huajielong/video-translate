@@ -70,6 +70,12 @@ except Exception:  # noqa: BLE001
 
 
 def _itt_cmd(*args: str) -> list[str]:
+    # Prefer the venv interpreter over indextts2.cmd: the .cmd launcher runs
+    # powershell/where, whose grandchildren can flash a console window.
+    py = os.environ.get("VTV_ITT_PYTHON", "")
+    entry = Path(os.environ.get("INDEXTTS2_HOME", "")) / "scripts" / "indextts2.py"
+    if py and entry.is_file():
+        return [py, str(entry), *args]
     # Windows ships .cmd; POSIX ships .sh, which may lose its exec bit when the
     # skill is copied from a Windows host. Invoke it through bash explicitly.
     if os.name == "nt":
