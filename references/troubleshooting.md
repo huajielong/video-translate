@@ -206,7 +206,10 @@ VTV_DUBBING_CACHE=D:/tmp/dubbing_cache_fresh python scripts/pipeline.py run ...
 
 ## Rubberband 不可用
 
-日志提示 `Rubberband 不可用，将使用 pydub+ffmpeg`。Windows 包内已带 `tools/rubberband/.../rubberband.exe`；Linux `apt install rubberband-cli`；macOS `brew install rubberband`。`pipeline.py` 会把该目录加入 PATH。
+日志提示 `Rubberband 不可用，将使用 pydub+ffmpeg`。仓库不带 Rubberband 二进制；
+Windows 请把 `rubberband.exe` 放到 PATH 或 `tools/rubberband/`，Linux
+`apt install rubberband-cli`，macOS `brew install rubberband`。`pipeline.py` 会把
+`tools/rubberband/` 加入 PATH。
 
 ## DeepSeek Key 验证
 

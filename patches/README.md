@@ -1,0 +1,65 @@
+# Vendor patches
+
+`bootstrap_vendor.py` downloads these upstream versions and applies the patches
+below. The patched code remains under the upstream licenses; the patch files are
+derived works and are included for reproducibility.
+
+## pyVideoTrans
+
+- Upstream: `https://github.com/jianchang512/pyvideotrans.git`
+- Tag: `v4.16`
+- Patch: `pyvideotrans.patch`
+- License of patched code: GPL-3.0 (`LICENSE.pyvideotrans`)
+- Modified paths:
+  - `videotrans/task/_rate.py`
+  - `videotrans/task/_stage_align.py`
+  - `videotrans/task/_stage_dubbing.py`
+  - `videotrans/task/_stage_subtitle.py`
+  - `videotrans/tts/_index.py`
+  - `videotrans/configure/_paths.py`
+
+`_stage_dubbing.py` is a full-file replacement patch because the local
+audio-native/fit implementation is substantially larger than upstream v4.16.
+Bootstrap normalizes patched text files to LF before applying; do the same if
+you apply the patch manually.
+
+## IndexTTS2 + wrapper
+
+- Upstream model/code: `https://github.com/index-tts/index-tts.git`
+- Tag: `v2.0.0`
+- Patch: `index-tts.patch`
+- Wrapper source: `vendor_src/index-tts2-cli/`
+- License: bilibili Model Use License (`LICENSE.index-tts`,
+  `NOTICE.index-tts.md`); not OSI open source
+- Modified paths:
+  - `indextts/infer_v2.py`
+  - `indextts/gpt/model_v2.py`
+  - `indextts/s2mel/modules/commons.py`
+  - `indextts/s2mel/modules/diffusion_transformer.py`
+  - `indextts/s2mel/modules/flow_matching.py`
+  - `indextts/utils/common.py`
+  - `indextts/utils/front.py`
+
+The wrapper in `vendor_src/index-tts2-cli/` is laid over the upstream checkout;
+it provides the HTTP daemon/API used by the skill.
+
+## Applying manually
+
+```bash
+# pyVideoTrans
+git clone --depth 1 --branch v4.16 \
+  https://github.com/jianchang512/pyvideotrans.git vendor/pyvideotrans
+# normalize the six patched files to LF first
+git apply --whitespace=nowarn patches/pyvideotrans.patch
+```
+
+```bash
+# IndexTTS2
+git clone --depth 1 --branch v2.0.0 \
+  https://github.com/index-tts/index-tts.git vendor/index-tts2-cli
+cp -a vendor_src/index-tts2-cli/. vendor/index-tts2-cli/
+# normalize the seven patched files to LF first
+git apply --whitespace=nowarn patches/index-tts.patch
+```
+
+Then run `python scripts/pipeline.py setup` to create venvs and download models.

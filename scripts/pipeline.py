@@ -295,6 +295,27 @@ def cmd_setup(args, cfg: dict) -> int:
     for d in (LOGS, STATE, TOOLS):
         d.mkdir(parents=True, exist_ok=True)
 
+    try:
+        from bootstrap_vendor import ensure_vendor
+        ensure_vendor(
+            install_pvt=(pvt == PVT_DEFAULT.resolve()),
+            install_itt=(itt == ITT_DEFAULT.resolve()),
+        )
+    except Exception as exc:
+        print(f"[setup] vendor bootstrap failed: {exc}")
+        print("        Install pyVideoTrans / IndexTTS2 manually and rerun:")
+        print("          python scripts/pipeline.py setup "
+              "--reuse-pvt /path/to/pyvideotrans --reuse-itt /path/to/index-tts2-cli")
+        return 2
+
+    if not (pvt / "cli.py").exists() or not (itt / "scripts" / "indextts2.py").exists():
+        print("[setup] vendor is missing. This repository does not bundle pyVideoTrans "
+              "or index-tts2-cli.")
+        print("        Put them under vendor/, or rerun:")
+        print("          python scripts/pipeline.py setup "
+              "--reuse-pvt /path/to/pyvideotrans --reuse-itt /path/to/index-tts2-cli")
+        return 2
+
     print(f"[setup] pyVideoTrans home: {pvt}")
     if pvt == PVT_DEFAULT.resolve():
         cmd = [sys.executable, str(WRAPPER), "setup", "--models", cfg["asr_model"]]
@@ -390,7 +411,33 @@ def cmd_doctor(_args, cfg: dict) -> int:
     critical = [ok for name, ok, _ in checks
                 if name in ("pyVideoTrans source", "pyVideoTrans venv",
                             "IndexTTS2 source", "IndexTTS2 venv")]
+    if not all(critical):
+        print("[doctor] vendor missing: run `python scripts/pipeline.py setup` "
+              "(auto-download), or use --reuse-pvt/--reuse-itt with an existing install.")
     return 0 if all(critical) else 1
+
+
+def vendor_ready(cfg: dict) -> bool:
+    pvt = Path(cfg["pyvideotrans_home"])
+    itt = Path(cfg["index_tts2_home"])
+    return (pvt / "cli.py").is_file() and (itt / "scripts" / "indextts2.py").is_file()
+
+
+def auto_setup(cfg: dict) -> bool:
+    """First-use provisioning: download vendor + models when missing."""
+    if vendor_ready(cfg):
+        return True
+    if os.environ.get("VTV_AUTO_INSTALL", "1").strip().lower() in ("0", "false", "no"):
+        print("[auto] vendor missing and VTV_AUTO_INSTALL=0; run setup manually.")
+        return False
+    print("[auto] vendor missing; running first-use setup "
+          "(downloads dependencies and model weights) ...")
+    args = argparse.Namespace(reuse_pvt="", reuse_itt="", deepseek_key="", proxy="")
+    try:
+        return cmd_setup(args, cfg) == 0
+    except Exception as exc:
+        print(f"[auto] first-use setup failed: {exc}")
+        return False
 
 
 def _pid_file(name: str) -> Path:
@@ -1126,6 +1173,11 @@ def main() -> int:
         cfg["out_dir"] = str(resolve(cfg["out_dir"]))
     if cfg.get("glossary"):
         cfg["glossary"] = str(resolve(cfg["glossary"]))
+
+    if args.command in ("dub", "run") and not _check_power(args):
+        return 2
+    if args.command in ("prep", "dub", "run", "serve") and not auto_setup(cfg):
+        return 2
 
     if args.command == "setup":
         return cmd_setup(args, cfg)

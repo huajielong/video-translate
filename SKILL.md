@@ -7,11 +7,15 @@ description: Translates and dubs videos into another language while cloning the 
 
 把视频翻译成目标语言并克隆原说话人音色的一条可迁移流水线：
 **ASR → 翻译 → 克隆配音 → 对齐/合成 → 响度归一化 → QC**。
-内置 pyVideoTrans（识别/翻译/合成）与 IndexTTS2（零样本克隆）。
+配套 pyVideoTrans（识别/翻译/合成）与 IndexTTS2（零样本克隆）；两者需单独安装，
+不随仓库分发。
 
 ## 硬规则
 
 1. **先 `doctor` 再跑任务；首次先 `setup`。** 缺依赖时按提示补跑 `setup`，不要直接 `run`。
+   仓库不附带 `vendor/`，但 `setup` 会自动 clone pyVideoTrans / IndexTTS2、应用
+   `patches/` 并下载模型；需要 git、网络和约 20GB+ 磁盘。已有安装可用
+   `setup --reuse-pvt ... --reuse-itt ...`，或用 `VTV_AUTO_INSTALL=0` 关闭自动下载。
 2. **不要把输入视频放进输出目录。** 上游 `clear_cache` 默认递归删除输出目录；`pipeline.py` 已规避，手工调用 `trans_cli.py` 时必须加 `--no-clear-cache`。
 3. **SRT 不要放在成品 MP4 旁边。** 播放器会自动加载同名 SRT，叠加硬字幕形成“两层字幕”；本流水线统一放到 `<out>/_字幕/`。
 4. **IndexTTS2 是单 worker。** 不要并发请求同一守护进程；`serve` 启动的桥接会按 `index_restart_every` 自动重启守护进程，不要再手动重启。
@@ -29,6 +33,9 @@ python scripts/pipeline.py run --src "D:/videos" --out "D:/translated" \
   --source en --target zh-cn --backend index
 python scripts/pipeline.py report --out "D:/translated"   # 汇总 QC 到 <out>/QC_SUMMARY.md
 ```
+
+`vendor/`、模型、checkpoints、`config.json` 和 API Key 都不随仓库分发；
+安装与许可证见根目录 `README.md`、`THIRD_PARTY_NOTICES.md`。
 
 产物：`<out>/<原名><final_suffix>.mp4`、`<out>/_字幕/<原名>.{源,目标}.srt`、`<out>/QC_SUMMARY.md`。
 中途失败直接重跑同一命令；已完成的阶段和逐句配音会命中缓存。

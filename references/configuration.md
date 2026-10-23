@@ -132,6 +132,7 @@
 | `VTV_FIT_CONDENSE_SPEED` | 对应 `fit_condense_speed` |
 | `VTV_GLOSSARY_FILE` | 压缩改写时要求保留的术语表；`pipeline.py` 自动设为 `glossary` |
 | `VTV_PIN_DAEMON` | `1` 时把真 daemon 固定 P-core + High，对应 `pin_daemon` |
+| `VTV_AUTO_INSTALL` | 默认 `1`；设为 `0` 时不在首次运行自动下载 vendor/models，改为手动 `setup` |
 | `VTV_ITT_PYTHON` | IndexTTS2 的 base `pythonw`（`pipeline.py` 自动设置；无控制台） |
 | `VTV_ITT_SITE` | IndexTTS2 venv 的 `Lib\site-packages`；聚类子进程靠它导入 torch/campplus |
 | `HF_ENDPOINT` | 强制 Hugging Face 镜像，如 `https://hf-mirror.com` |

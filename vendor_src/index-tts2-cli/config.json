@@ -1,0 +1,20 @@
+{
+  "project_dir": null,
+  "port": 8788,
+  "fp16": true,
+  "idle_timeout": 3600,
+  "max_pending": 4,
+  "startup_timeout": 300,
+  "use_cuda_kernel": false,
+  "use_deepspeed": false,
+  "allow_network": false,
+  "auto_download": true,
+  "auto_bootstrap": true,
+  "device": null,
+  "pypi_index": null,
+  "ffmpeg": null,
+  "default_voice": null,
+  "out_dir": null,
+  "state_dir": null,
+  "python": null
+}

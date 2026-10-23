@@ -35,36 +35,39 @@ traceback 写到 `.runtime/logs/entry.log` / `trans_cli.log`。
 
 ## 分发
 
-> `vendor/index-tts2-cli` 是运行时副本，不是第二个技能：保留 `scripts/`、`indextts/`、`references/`，已移除其独立的 `SKILL.md` / `CLAUDE.md`，避免出现第二个技能入口。需要单独使用 TTS 时请安装 `index-tts2-cli` 技能本身。
+本仓库采用 **首次使用自动下载**：GitHub 仓库只包含技能代码、文档、术语表、
+补丁和 IndexTTS2 CLI wrapper，不包含：
 
-**只复制技能目录**，不要复制：
-
-- `vendor/pyvideotrans/.venv`（Windows venv 含绝对路径）
-- `vendor/pyvideotrans/models`、`tmp`、`output`、`logs`
-- `vendor/index-tts2-cli/checkpoints`、`venv`、`runtime`、`out`
-- `config.json`、`.runtime/`、`work/`
+- `vendor/pyvideotrans`（GPL-3.0，体积大且需按 GPL 分发源码）
+- `vendor/index-tts2-cli`（bilibili 模型使用许可，不是 OSI 开源）
+- `tools/rubberband`（GPL 可执行文件）
+- 模型权重、checkpoints、venv、`config.json`、`.runtime/`、课程媒体
 - 任何 `*_key` / `params.json` 中的密钥
 
-> `config.json` 可能保留着当前机器的外部安装路径。复制到新机器前请删除它，
-> 或在目标机用 `setup` 覆盖。
+首次 `setup`（或缺失 vendor 时的 `run` / `dub` / `serve` / `prep`）会自动：
 
-目标机：
+1. clone pyVideoTrans `v4.16`，应用 `patches/pyvideotrans.patch`；
+2. clone IndexTTS2 `v2.0.0`，叠加 `vendor_src/index-tts2-cli/`，应用
+   `patches/index-tts.patch`；
+3. 创建 venv、下载 Whisper / IndexTTS2 模型和 checkpoints。
+
+需要本机有 git、网络和约 20GB+ 空闲磁盘。已有安装可复用：
 
 ```bash
-# 新装（下载依赖与模型）
-python scripts/pipeline.py setup
-
-# 或复用已有安装
 python scripts/pipeline.py setup \
   --reuse-pvt /path/to/pyvideotrans \
   --reuse-itt /path/to/index-tts2-cli
 ```
 
+不想自动下载时设 `VTV_AUTO_INSTALL=0`。`vendor/` 已在 `.gitignore` 中；
+不要为了省事把整个本地技能目录（含 venv/models）打成 zip 上传。上游依赖的
+许可证和商用限制见根目录 `THIRD_PARTY_NOTICES.md` 与 `patches/README.md`。
+
 `setup` 会：
 
 1. 用 `trans_cli.py setup` 创建 pyVideoTrans venv、uv、ffmpeg、Whisper large-v3-turbo；
 2. 用 `indextts2.py setup` 创建 IndexTTS2 venv 并下载 checkpoints；
-3. 检查 Rubberband（Windows 包内已带可执行文件）；
+3. 检查 Rubberband（仓库不带二进制；用系统包管理器或用户自行放入 PATH）；
 4. 写 `params.json` 与 `config.json`（字段含义见 `configuration.md`）；
 5. 运行 `doctor`。
 

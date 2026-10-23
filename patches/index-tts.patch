@@ -1,0 +1,847 @@
+--- a/indextts/infer_v2.py
++++ b/indextts/infer_v2.py
+@@ -38,7 +38,7 @@
+ class IndexTTS2:
+     def __init__(
+             self, cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_fp16=False, device=None,
+-            use_cuda_kernel=None,use_deepspeed=False, use_accel=False, use_torch_compile=False
++            use_cuda_kernel=None,use_deepspeed=False
+     ):
+         """
+         Args:
+@@ -48,8 +48,6 @@
+             device (str): device to use (e.g., 'cuda:0', 'cpu'). If None, it will be set automatically based on the availability of CUDA or MPS.
+             use_cuda_kernel (None | bool): whether to use BigVGan custom fused activation CUDA kernel, only for CUDA device.
+             use_deepspeed (bool): whether to use DeepSpeed or not.
+-            use_accel (bool): whether to use acceleration engine for GPT2 or not.
+-            use_torch_compile (bool): whether to use torch.compile for optimization or not.
+         """
+         if device is not None:
+             self.device = device
+@@ -77,12 +75,10 @@
+         self.model_dir = model_dir
+         self.dtype = torch.float16 if self.use_fp16 else None
+         self.stop_mel_token = self.cfg.gpt.stop_mel_token
+-        self.use_accel = use_accel
+-        self.use_torch_compile = use_torch_compile
+ 
+         self.qwen_emo = QwenEmotion(os.path.join(self.model_dir, self.cfg.qwen_emo_path))
+ 
+-        self.gpt = UnifiedVoice(**self.cfg.gpt, use_accel=self.use_accel)
++        self.gpt = UnifiedVoice(**self.cfg.gpt)
+         self.gpt_path = os.path.join(self.model_dir, self.cfg.gpt_checkpoint)
+         load_checkpoint(self.gpt, self.gpt_path)
+         self.gpt = self.gpt.to(self.device)
+@@ -139,13 +135,6 @@
+         )
+         self.s2mel = s2mel.to(self.device)
+         self.s2mel.models['cfm'].estimator.setup_caches(max_batch_size=1, max_seq_length=8192)
+-        
+-        # Enable torch.compile optimization if requested
+-        if self.use_torch_compile:
+-            print(">> Enabling torch.compile optimization")
+-            self.s2mel.enable_torch_compile()
+-            print(">> torch.compile optimization enabled successfully")
+-        
+         self.s2mel.eval()
+         print(">> s2mel weights restored from:", s2mel_path)
+ 
+@@ -167,17 +156,11 @@
+         print(">> bigvgan weights restored from:", bigvgan_name)
+ 
+         self.bpe_path = os.path.join(self.model_dir, self.cfg.dataset["bpe_model"])
+-        self.normalizer = TextNormalizer(enable_glossary=True)
++        self.normalizer = TextNormalizer()
+         self.normalizer.load()
+         print(">> TextNormalizer loaded")
+         self.tokenizer = TextTokenizer(self.bpe_path, self.normalizer)
+         print(">> bpe model loaded from:", self.bpe_path)
+-
+-        # 加载术语词汇表（如果存在）
+-        self.glossary_path = os.path.join(self.model_dir, "glossary.yaml")
+-        if os.path.exists(self.glossary_path):
+-            self.normalizer.load_glossary_from_yaml(self.glossary_path)
+-            print(">> Glossary loaded from:", self.glossary_path)
+ 
+         emo_matrix = torch.load(os.path.join(self.model_dir, self.cfg.emo_matrix))
+         self.emo_matrix = emo_matrix.to(self.device)
+@@ -282,20 +265,6 @@
+         code_lens = torch.tensor(code_lens, dtype=torch.long, device=device)
+         return codes, code_lens
+ 
+-    def interval_silence(self, wavs, sampling_rate=22050, interval_silence=200):
+-        """
+-        Silences to be insert between generated segments.
+-        """
+-
+-        if not wavs or interval_silence <= 0:
+-            return wavs
+-
+-        # get channel_size
+-        channel_size = wavs[0].size(0)
+-        # get silence tensor
+-        sil_dur = int(sampling_rate * interval_silence / 1000.0)
+-        return torch.zeros(channel_size, sil_dur)
+-
+     def insert_interval_silence(self, wavs, sampling_rate=22050, interval_silence=200):
+         """
+         Insert silences between generated segments.
+@@ -358,32 +327,7 @@
+               emo_audio_prompt=None, emo_alpha=1.0,
+               emo_vector=None,
+               use_emo_text=False, emo_text=None, use_random=False, interval_silence=200,
+-              verbose=False, max_text_tokens_per_segment=120, stream_return=False, more_segment_before=0, **generation_kwargs):
+-        if stream_return:
+-            return self.infer_generator(
+-                spk_audio_prompt, text, output_path,
+-                emo_audio_prompt, emo_alpha,
+-                emo_vector,
+-                use_emo_text, emo_text, use_random, interval_silence,
+-                verbose, max_text_tokens_per_segment, stream_return, more_segment_before, **generation_kwargs
+-            )
+-        else:
+-            try:
+-                return list(self.infer_generator(
+-                    spk_audio_prompt, text, output_path,
+-                    emo_audio_prompt, emo_alpha,
+-                    emo_vector,
+-                    use_emo_text, emo_text, use_random, interval_silence,
+-                    verbose, max_text_tokens_per_segment, stream_return, more_segment_before, **generation_kwargs
+-                ))[0]
+-            except IndexError:
+-                return None
+-
+-    def infer_generator(self, spk_audio_prompt, text, output_path,
+-              emo_audio_prompt=None, emo_alpha=1.0,
+-              emo_vector=None,
+-              use_emo_text=False, emo_text=None, use_random=False, interval_silence=200,
+-              verbose=False, max_text_tokens_per_segment=120, stream_return=False, quick_streaming_tokens=0, **generation_kwargs):
++              verbose=False, max_text_tokens_per_segment=120, **generation_kwargs):
+         print(">> starting inference...")
+         self._set_gr_progress(0, "starting inference...")
+         if verbose:
+@@ -425,6 +369,10 @@
+             emo_alpha = 1.0
+ 
+         # 如果参考音频改变了，才需要重新生成, 提升速度
++        spk_cache_hit = (
++            self.cache_spk_cond is not None
++            and self.cache_spk_audio_prompt == spk_audio_prompt
++        )
+         if self.cache_spk_cond is None or self.cache_spk_audio_prompt != spk_audio_prompt:
+             if self.cache_spk_cond is not None:
+                 self.cache_spk_cond = None
+@@ -470,7 +418,7 @@
+             ref_mel = self.cache_mel
+ 
+         if emo_vector is not None:
+-            weight_vector = torch.tensor(emo_vector, device=self.device)
++            weight_vector = torch.tensor(emo_vector).to(self.device)
+             if use_random:
+                 random_index = [random.randint(0, x - 1) for x in self.emo_num]
+             else:
+@@ -501,15 +449,8 @@
+ 
+         self._set_gr_progress(0.1, "text processing...")
+         text_tokens_list = self.tokenizer.tokenize(text)
+-        segments = self.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment, quick_streaming_tokens = quick_streaming_tokens)
++        segments = self.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment)
+         segments_count = len(segments)
+-
+-        text_token_ids = self.tokenizer.convert_tokens_to_ids(text_tokens_list)
+-        if self.tokenizer.unk_token_id in text_token_ids:
+-            print(f"  >> Warning: input text contains {text_token_ids.count(self.tokenizer.unk_token_id)} unknown tokens (id={self.tokenizer.unk_token_id}):")
+-            print( "     Tokens which can't be encoded: ", [t for t, id in zip(text_tokens_list, text_token_ids) if id == self.tokenizer.unk_token_id])
+-            print(f"     Consider updating the BPE model or modifying the text to avoid unknown tokens.")
+-                  
+         if verbose:
+             print("text_tokens_list:", text_tokens_list)
+             print("segments count:", segments_count)
+@@ -531,8 +472,8 @@
+         gpt_forward_time = 0
+         s2mel_time = 0
+         bigvgan_time = 0
++        diffusion_steps = int(os.environ.get("INDEXTTS2_DIFFUSION_STEPS", "25"))
+         has_warned = False
+-        silence = None # for stream_return
+         for seg_idx, sent in enumerate(segments):
+             self._set_gr_progress(0.2 + 0.7 * seg_idx / segments_count,
+                                   f"speech synthesis {seg_idx + 1}/{segments_count}...")
+@@ -597,16 +538,15 @@
+                 #                     print(f"code len: {code_lens}")
+ 
+                 code_lens = []
+-                max_code_len = 0
+                 for code in codes:
+                     if self.stop_mel_token not in code:
++                        code_lens.append(len(code))
+                         code_len = len(code)
+                     else:
+-                        len_ = (code == self.stop_mel_token).nonzero(as_tuple=False)[0]
+-                        code_len = len_[0].item() if len_.numel() > 0 else len(code)
++                        len_ = (code == self.stop_mel_token).nonzero(as_tuple=False)[0] + 1
++                        code_len = len_ - 1
+                     code_lens.append(code_len)
+-                    max_code_len = max(max_code_len, code_len)
+-                codes = codes[:, :max_code_len]
++                codes = codes[:, :code_len]
+                 code_lens = torch.LongTensor(code_lens)
+                 code_lens = code_lens.to(self.device)
+                 if verbose:
+@@ -634,7 +574,7 @@
+                 dtype = None
+                 with torch.amp.autocast(text_tokens.device.type, enabled=dtype is not None, dtype=dtype):
+                     m_start_time = time.perf_counter()
+-                    diffusion_steps = 25
++                    diffusion_steps = int(os.environ.get("INDEXTTS2_DIFFUSION_STEPS", "25"))
+                     inference_cfg_rate = 0.7
+                     latent = self.s2mel.models['gpt_layer'](latent)
+                     S_infer = self.semantic_codec.quantizer.vq2emb(codes.unsqueeze(1))
+@@ -666,11 +606,6 @@
+                     print(f"wav shape: {wav.shape}", "min:", wav.min(), "max:", wav.max())
+                 # wavs.append(wav[:, :-512])
+                 wavs.append(wav.cpu())  # to cpu before saving
+-                if stream_return:
+-                    yield wav.cpu()
+-                    if silence == None:
+-                        silence = self.interval_silence(wavs, sampling_rate=sampling_rate, interval_silence=interval_silence)
+-                    yield silence
+         end_time = time.perf_counter()
+ 
+         self._set_gr_progress(0.9, "saving audio...")
+@@ -685,6 +620,47 @@
+         print(f">> Generated audio length: {wav_length:.2f} seconds")
+         print(f">> RTF: {(end_time - start_time) / wav_length:.4f}")
+ 
++        probe = os.environ.get("VTV_PROBE_FILE")
++        if probe:
++            try:
++                parent = os.path.dirname(os.path.abspath(probe))
++                if parent:
++                    os.makedirs(parent, exist_ok=True)
++                # engine.run() writes a .partial-j_<id>.wav and renames it after
++                # infer() returns; report the final name so clients can join.
++                output_name = re.sub(
++                    r"\.partial-j_[0-9a-f]+", "",
++                    os.path.basename(str(output_path)))
++                rec = {
++                    "ts": time.time(),
++                    "start_ts": time.time() - (end_time - start_time),
++                    "seq": time.time_ns(),
++                    "pid": os.getpid(),
++                    "output": output_name,
++                    "gpt_gen": gpt_gen_time,
++                    "gpt_forward": gpt_forward_time,
++                    "s2mel": s2mel_time,
++                    "bigvgan": bigvgan_time,
++                    "total": end_time - start_time,
++                    "audio": wav_length,
++                    "rtf": (end_time - start_time) / wav_length,
++                    "cuda_alloc_mb": round(torch.cuda.memory_allocated() / 1048576, 1)
++                    if torch.cuda.is_available() else 0,
++                    "cuda_reserved_mb": round(torch.cuda.memory_reserved() / 1048576, 1)
++                    if torch.cuda.is_available() else 0,
++                    "ref": os.path.basename(str(spk_audio_prompt)),
++                    "ref_path": str(spk_audio_prompt),
++                    "spk_cache_hit": bool(spk_cache_hit),
++                    "num_beams": num_beams,
++                    "diffusion_steps": diffusion_steps,
++                    "chars": len(text),
++                    "segments": len(segments),
++                }
++                with open(probe, "a", encoding="utf-8") as f:
++                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
++            except Exception:
++                pass
++
+         # save audio
+         wav = wav.cpu()  # to cpu
+         if output_path:
+@@ -696,16 +672,12 @@
+                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
+             torchaudio.save(output_path, wav.type(torch.int16), sampling_rate)
+             print(">> wav file saved to:", output_path)
+-            if stream_return:
+-                return None
+-            yield output_path
++            return output_path
+         else:
+-            if stream_return:
+-                return None
+             # 返回以符合Gradio的格式要求
+             wav_data = wav.type(torch.int16)
+             wav_data = wav_data.numpy().T
+-            yield (sampling_rate, wav_data)
++            return (sampling_rate, wav_data)
+ 
+ 
+ def find_most_similar_cosine(query_vector, matrix):
+@@ -833,19 +805,6 @@
+ if __name__ == "__main__":
+     prompt_wav = "examples/voice_01.wav"
+     text = '欢迎大家来体验indextts2，并给予我们意见与反馈，谢谢大家。'
+-    tts = IndexTTS2(
+-        cfg_path="checkpoints/config.yaml", 
+-        model_dir="checkpoints", 
+-        use_cuda_kernel=False,
+-        use_torch_compile=True
+-    )
++
++    tts = IndexTTS2(cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_cuda_kernel=False)
+     tts.infer(spk_audio_prompt=prompt_wav, text=text, output_path="gen.wav", verbose=True)
+-    char_size = 5
+-    import string
+-    time_buckets = []
+-    for i in range(10):
+-        text = ''.join(random.choices(string.ascii_letters, k=char_size))
+-        start_time = time.time()
+-        tts.infer(spk_audio_prompt=prompt_wav, text=text, output_path="gen.wav", verbose=True)
+-        time_buckets.append(time.time() - start_time)
+-    print(time_buckets)
+--- a/indextts/gpt/model_v2.py
++++ b/indextts/gpt/model_v2.py
+@@ -1,4 +1,5 @@
+ import functools
++import os
+ 
+ import torch
+ import torch.nn as nn
+@@ -307,7 +308,7 @@
+                  start_text_token=0, stop_text_token=1, number_mel_codes=8194, start_mel_token=8192, stop_mel_token=8193,
+                  train_solo_embeddings=False, use_mel_codes_as_input=True,
+                  checkpointing=True, types=1,
+-                 condition_num_latent=32, condition_type="perceiver", condition_module=None, emo_condition_module=None, use_accel=False):
++                 condition_num_latent=32, condition_type="perceiver", condition_module=None, emo_condition_module=None):
+         """
+         Args:
+             layers: Number of layers in transformer stack.
+@@ -409,9 +410,6 @@
+         for module in embeddings:
+             module.weight.data.normal_(mean=0.0, std=.02)
+ 
+-        self.use_accel = use_accel
+-        self.accel_engine = None  # Will be initialized in post_init_gpt2_config
+-
+     def post_init_gpt2_config(self, use_deepspeed=False, kv_cache=False, half=False):
+         seq_length = self.max_mel_tokens + self.max_text_tokens + 2
+         gpt_config = GPT2Config(
+@@ -424,38 +422,6 @@
+             gradient_checkpointing=False,
+             use_cache=True,
+         )
+-
+-        if self.use_accel and torch.cuda.is_available():
+-            # Check if flash attention is available
+-            try:
+-                import flash_attn
+-            except ImportError:
+-                raise ImportError("flash_attn is required for acceleration but not installed. Please install from https://github.com/Dao-AILab/flash-attention/releases/")
+-
+-            from indextts.accel import GPT2AccelModel, AccelInferenceEngine
+-
+-            # Create accel model
+-            accel_gpt = GPT2AccelModel(gpt_config)
+-            accel_gpt.load_state_dict(self.gpt.state_dict(), strict=False)
+-
+-            if half:
+-                accel_gpt = accel_gpt.half().cuda()
+-            else:
+-                accel_gpt = accel_gpt.cuda()
+-            accel_gpt.eval()
+-
+-            lm_head_with_norm = nn.Sequential(self.final_norm, self.mel_head)
+-            self.accel_engine = AccelInferenceEngine(
+-                model=accel_gpt,
+-                lm_head=lm_head_with_norm,
+-                num_layers=self.layers,
+-                num_heads=self.heads,
+-                head_dim=self.model_dim // self.heads,
+-                block_size=256,
+-                num_blocks=16,  # Reduce to save memory (16*256 = 4096 tokens capacity)
+-                use_cuda_graph=True,
+-            )
+-            print("acceleration engine initialized")
+         self.inference_model = GPT2InferenceModel(
+             gpt_config,
+             self.gpt,
+@@ -481,6 +447,10 @@
+             self.inference_model = self.ds_engine.module.eval()
+         else:
+             self.inference_model = self.inference_model.eval()
++            if os.environ.get("INDEXTTS2_COMPILE", "0") == "1":
++                self.inference_model = torch.compile(
++                    self.inference_model, mode="reduce-overhead",
++                    fullgraph=False, dynamic=True)
+ 
+         # self.inference_model = PrunedGPT2InferenceModel(gpt_config, self.gpt, self.mel_pos_embedding, self.mel_embedding, self.final_norm, self.mel_head)
+         self.gpt.wte = self.mel_embedding
+@@ -756,26 +726,12 @@
+             min_tokens_to_keep = 2 if hf_generate_kwargs.get("num_beams", 1) > 1 else 1
+             logits_processor.append(TypicalLogitsWarper(mass=typical_mass, min_tokens_to_keep=min_tokens_to_keep))
+         max_length = (trunc_index + self.max_mel_tokens - 1) if max_generate_length is None else trunc_index + max_generate_length
+-        
+-        # Use accel engine if available (single sequence only)
+-        if self.accel_engine is not None and num_return_sequences == 1:
+-            output = self.accel_engine.generate(
+-                inputs,  # fake input_ids (all 1s + start_mel_token)
+-                max_new_tokens=max_length - trunc_index,
+-                attention_mask=attention_mask,
+-                temperature=hf_generate_kwargs.get('temperature', 1),
+-                stop_tokens=[self.stop_mel_token],
+-                tts_embeddings=inputs_embeds,  # [pad][cond][text] embeddings (87 tokens, NO start_mel_token)
+-                tts_mel_embedding=self.inference_model.embeddings,  # mel_embedding layer
+-                tts_text_pos_embedding=self.inference_model.text_pos_embedding,  # text_pos_embedding layer
+-            )
+-        else:
+-            output = self.inference_model.generate(inputs, 
+-                                                bos_token_id=self.start_mel_token, pad_token_id=self.stop_mel_token,
+-                                                eos_token_id=self.stop_mel_token, attention_mask=attention_mask,
+-                                                max_length=max_length, logits_processor=logits_processor,
+-                                                num_return_sequences=num_return_sequences,
+-                                                **hf_generate_kwargs)
++        output = self.inference_model.generate(inputs, 
++                                            bos_token_id=self.start_mel_token, pad_token_id=self.stop_mel_token,
++                                            eos_token_id=self.stop_mel_token, attention_mask=attention_mask,
++                                            max_length=max_length, logits_processor=logits_processor,
++                                            num_return_sequences=num_return_sequences,
++                                            **hf_generate_kwargs)
+         if isinstance(output, torch.Tensor):
+             return output[:, trunc_index:], speech_conditioning_latent
+         # GenerateOutput
+--- a/indextts/s2mel/modules/commons.py
++++ b/indextts/s2mel/modules/commons.py
+@@ -133,10 +133,8 @@
+ def fused_add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
+     n_channels_int = n_channels[0]
+     in_act = input_a + input_b
+-    # use torch.split to avoid dynamic slicing
+-    t_act_part, s_act_part = torch.split(in_act, n_channels_int, dim=1)
+-    t_act = torch.tanh(t_act_part)
+-    s_act = torch.sigmoid(s_act_part)
++    t_act = torch.tanh(in_act[:, :n_channels_int, :])
++    s_act = torch.sigmoid(in_act[:, n_channels_int:, :])
+     acts = t_act * s_act
+     return acts
+ 
+@@ -438,15 +436,6 @@
+     def forward_gpt(self,x):
+         x = self.models['gpt_layer'](x)
+         return x
+-
+-    def enable_torch_compile(self):
+-        """Enable torch.compile optimization.
+-        
+-        This method applies torch.compile to the model for significant
+-        performance improvements during inference.
+-        """
+-        if 'cfm' in self.models:
+-            self.models['cfm'].enable_torch_compile()
+ 
+ 
+ 
+--- a/indextts/s2mel/modules/diffusion_transformer.py
++++ b/indextts/s2mel/modules/diffusion_transformer.py
+@@ -233,7 +233,7 @@
+         if self.time_as_token: # False
+             x_in = torch.cat([t1.unsqueeze(1), x_in], dim=1)
+             
+-        x_mask = sequence_mask(x_lens + self.style_as_token + self.time_as_token, max_length=x_in.size(1)).to(x.device).unsqueeze(1) #torch.Size([1, 1, 1863])True
++        x_mask = sequence_mask(x_lens + self.style_as_token + self.time_as_token).to(x.device).unsqueeze(1) #torch.Size([1, 1, 1863])True
+         input_pos = self.input_pos[:x_in.size(1)]  # (T,) range（0，1863）
+         x_mask_expanded = x_mask[:, None, :].repeat(1, 1, x_in.size(1), 1) if not self.is_causal else None # torch.Size([1, 1, 1863, 1863]
+         x_res = self.transformer(x_in, t1.unsqueeze(1), input_pos, x_mask_expanded) # [2, 1863, 512]
+--- a/indextts/s2mel/modules/flow_matching.py
++++ b/indextts/s2mel/modules/flow_matching.py
+@@ -169,18 +169,3 @@
+             self.estimator = DiT(args)
+         else:
+             raise NotImplementedError(f"Unknown diffusion type {args.dit_type}")
+-
+-    def enable_torch_compile(self):
+-        """Enable torch.compile optimization for the estimator model.
+-        
+-        This method applies torch.compile to the estimator (DiT model) for significant
+-        performance improvements during inference. It also configures distributed
+-        training optimizations if applicable.
+-        """
+-        if torch.distributed.is_initialized():
+-            torch._inductor.config.reorder_for_compute_comm_overlap = True
+-        self.estimator = torch.compile(
+-            self.estimator, 
+-            fullgraph=True,
+-            dynamic=True,
+-        )
+--- a/indextts/utils/common.py
++++ b/indextts/utils/common.py
+@@ -62,23 +62,22 @@
+       output = "see you!"
+     """
+     # replace english words in the line with placeholders
+-    english_word_pattern = re.compile(r"([A-Z]+(?:[\s'-][A-Z-]+)*)", re.IGNORECASE)
++    english_word_pattern = re.compile(r"([A-Z]+(?:[\s-][A-Z-]+)*)", re.IGNORECASE)
+     english_sents = english_word_pattern.findall(line)
+     for i, sent in enumerate(english_sents):
+         line = line.replace(sent, f"<sent_{i}>")
+ 
+     words = line.split()
+     # restore english sentences
+-    sent_placeholder_pattern = re.compile(r"(<sent_(\d+)>)")
++    sent_placeholder_pattern = re.compile(r"^.*?(<sent_(\d+)>)")
+     for i in range(len(words)):
+-        all_matches = sent_placeholder_pattern.findall(words[i])
+-        if len(all_matches) > 1:
++        m = sent_placeholder_pattern.match(words[i])
++        if m:
+             # restore the english word
+-            for h,j in all_matches:
+-                placeholder_index = int(j)
+-                words[i] = words[i].replace(h, english_sents[placeholder_index])
+-                if do_lower_case:
+-                    words[i] = words[i].lower()
++            placeholder_index = int(m.group(2))
++            words[i] = words[i].replace(m.group(1), english_sents[placeholder_index])
++            if do_lower_case:
++                words[i] = words[i].lower()
+     return "".join(words)
+ 
+ 
+--- a/indextts/utils/front.py
++++ b/indextts/utils/front.py
+@@ -1,5 +1,4 @@
+ # -*- coding: utf-8 -*-
+-from functools import lru_cache
+ import os
+ import traceback
+ import re
+@@ -10,7 +9,7 @@
+ 
+ 
+ class TextNormalizer:
+-    def __init__(self, enable_glossary=False):
++    def __init__(self):
+         self.zh_normalizer = None
+         self.en_normalizer = None
+         self.char_rep_map = {
+@@ -54,24 +53,6 @@
+             "$": ".",
+             **self.char_rep_map,
+         }
+-        self.enable_glossary = enable_glossary
+-        # 术语词汇表：用户可自定义专业术语的读法
+-        # 格式: {"原始术语": {"en": "英文读法", "zh": "中文读法"}}
+-        # "M.2": {"en": "M dot two", "zh": "M 二"},
+-        # "PCIe 5.0": {"en": "PCIE five", "zh": "PCIE 五点零"},
+-        # "PCIe 4.0": {"en": "PCIE four", "zh": "PCIE 四点零"},
+-        # "AHCI": "A H C I",
+-        # "TTS": "T T S",
+-        # "Inc.": {"en": "Ink"},
+-        # ".json": {"en": " dot Jay-Son", "zh": "点 Jay-Son"},
+-        # "C++": {"en": "C plus plus", "zh": "C 加加"},
+-        # "C#": "C sharp"
+-        # self.term_glossary = {
+-        #     "C++": {"en": "C plus plus", "zh": "C 加加"},
+-        #     "C#": "C sharp",
+-        #     "CMake": "C Make",
+-        # }
+-        self.term_glossary = dict()
+ 
+     def match_email(self, email):
+         # 正则表达式匹配邮箱格式：数字英文@数字英文.英文
+@@ -88,14 +69,6 @@
+     """
+     匹配人名，格式：中文·中文，中文·中文-中文
+     例如：克里斯托弗·诺兰，约瑟夫·高登-莱维特
+-    """
+-
+-    TECH_TERM_PATTERN = r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+"
+-    """
+-    匹配技术术语，格式：字母开头+(字母或数字)*+(-字母或数字)+
+-    例如：GPT-5-nano, F5-TTS, Fish-Speech, GPT-5, CosyVoice-2
+-    必须以字母开头，避免匹配纯数字（如电话号码 135-4567-8900）
+-    用于保护连字符结构，防止中文normalizer将连字符解析为减号（如"负五减"）
+     """
+ 
+     # 匹配常见英语缩写 's，仅用于替换为 is，不匹配所有 's
+@@ -143,13 +116,8 @@
+             return ""
+         if self.use_chinese(text):
+             text = re.sub(TextNormalizer.ENGLISH_CONTRACTION_PATTERN, r"\1 is", text, flags=re.IGNORECASE)
+-            # 应用术语词汇表（优先级最高，在所有保护之前）
+-            if self.enable_glossary:
+-                text = self.apply_glossary_terms(text, lang="zh")
+-            # 保护技术术语（如 GPT-5-nano）避免被中文normalizer错误处理
+-            replaced_text, tech_list = self.save_tech_terms(text.rstrip())
+-            replaced_text, pinyin_list = self.save_pinyin_tones(replaced_text)
+-
++            replaced_text, pinyin_list = self.save_pinyin_tones(text.rstrip())
++            
+             replaced_text, original_name_list = self.save_names(replaced_text)
+             try:
+                 result = self.zh_normalizer.normalize(replaced_text)
+@@ -160,21 +128,12 @@
+             result = self.restore_names(result, original_name_list)
+             # 恢复拼音声调
+             result = self.restore_pinyin_tones(result, pinyin_list)
+-            # 恢复技术术语
+-            result = self.restore_tech_terms(result, tech_list)
+             pattern = re.compile("|".join(re.escape(p) for p in self.zh_char_rep_map.keys()))
+             result = pattern.sub(lambda x: self.zh_char_rep_map[x.group()], result)
+         else:
+             try:
+                 text = re.sub(TextNormalizer.ENGLISH_CONTRACTION_PATTERN, r"\1 is", text, flags=re.IGNORECASE)
+-                # 应用术语词汇表（优先级最高，在所有保护之前）
+-                if self.enable_glossary:
+-                    text = self.apply_glossary_terms(text, lang="en")
+-                # 保护技术术语（如 GPT-5-Nano）避免被英文normalizer错误处理
+-                replaced_text, tech_list = self.save_tech_terms(text)
+-                result = self.en_normalizer.normalize(replaced_text)
+-                # 恢复技术术语
+-                result = self.restore_tech_terms(result, tech_list)
++                result = self.en_normalizer.normalize(text)
+             except Exception:
+                 result = text
+                 print(traceback.format_exc())
+@@ -228,133 +187,6 @@
+             number = chr(ord("a") + i)
+             transformed_text = transformed_text.replace(f"<n_{number}>", name)
+         return transformed_text
+-
+-    def save_tech_terms(self, original_text):
+-        """
+-        保护技术术语中的连字符，防止被中文normalizer解析为减号
+-        策略：将术语中的连字符替换为特殊占位符<H>，数字仍可被正常处理
+-        例如：GPT-5-nano -> GPT<H>5<H>nano，然后 5 被转换为 五
+-        最终恢复为：GPT-五-nano
+-        """
+-        tech_pattern = re.compile(TextNormalizer.TECH_TERM_PATTERN)
+-        original_tech_list = tech_pattern.findall(original_text)
+-        if len(original_tech_list) == 0:
+-            return (original_text, None)
+-
+-        # 去重并按长度降序排列（避免短匹配先替换导致问题）
+-        original_tech_list = sorted(set(original_tech_list), key=len, reverse=True)
+-        transformed_text = original_text
+-
+-        # 将术语中的连字符替换为占位符 <H>
+-        for term in original_tech_list:
+-            # 将 GPT-5-nano 替换为 GPT<H>5<H>nano
+-            protected_term = term.replace("-", "<H>")
+-            transformed_text = transformed_text.replace(term, protected_term)
+-
+-        return transformed_text, original_tech_list
+-
+-    def restore_tech_terms(self, normalized_text, original_tech_list):
+-        """
+-        恢复技术术语中的连字符
+-        将占位符 <H> 恢复为连字符 -
+-        同时清理 normalizer 可能在占位符周围添加的多余空格
+-        """
+-        if not original_tech_list or len(original_tech_list) == 0:
+-            return normalized_text
+-
+-        # 清理 <H> 周围可能的空格，然后恢复为连字符
+-        # 处理模式: " <H> " -> "-", " <H>" -> "-", "<H> " -> "-", "<H>" -> "-"
+-        transformed_text = re.sub(r'\s*<H>\s*', '-', normalized_text)
+-        return transformed_text
+-
+-    def apply_glossary_terms(self, text, lang="zh"):
+-        """
+-        应用术语词汇表，将专业术语替换为对应语言的读法
+-
+-        Args:
+-            text: 待处理文本
+-            lang: 语言类型 "zh" 或 "en"
+-
+-        Returns:
+-            处理后的文本
+-
+-        Example:
+-            "M.2 NVMe SSD" -> (zh) "M 二 NVMe SSD"
+-            "M.2 NVMe SSD" -> (en) "M dot two NVMe SSD"
+-        """
+-        if not self.term_glossary:
+-            return text
+-
+-        # 按术语长度降序排列，避免短术语先匹配导致长术语无法匹配
+-        # 例如："PCIe 5.0" 应该在 "PCIe" 之前匹配
+-        sorted_terms = sorted(self.term_glossary.keys(), key=len, reverse=True)
+-        @lru_cache(maxsize=42)
+-        def get_term_pattern(term: str):
+-            return re.compile(re.escape(term), re.IGNORECASE)
+-        transformed_text = text
+-        for term in sorted_terms:
+-            term_value = self.term_glossary[term]
+-            if isinstance(term_value, dict):
+-                replacement = term_value.get(lang, term_value.get(lang, term))
+-            else:
+-                replacement = term_value
+-            # 使用正则进行大小写不敏感的替换
+-            pattern = get_term_pattern(term)
+-            transformed_text = pattern.sub(replacement, transformed_text)
+-
+-        return transformed_text
+-
+-    def load_glossary(self, glossary_dict):
+-        """
+-        加载外部术语词汇表
+-
+-        Args:
+-            glossary_dict: 术语词典，格式为 {"术语": {"en": "英文读法", "zh": "中文读法"}}
+-
+-        Example:
+-            normalizer.load_glossary({
+-                "M.2": {"en": "M dot two", "zh": "M 二"},
+-                "PCIe": {"en": "PCIE", "zh": "PCIE"}
+-            })
+-        """
+-        if glossary_dict and isinstance(glossary_dict, dict):
+-            self.term_glossary.update(glossary_dict)
+-
+-    def load_glossary_from_yaml(self, glossary_path):
+-        """
+-        从 YAML 文件加载术语词汇表
+-
+-        Args:
+-            glossary_path: YAML 文件路径
+-
+-        Example:
+-            normalizer.load_glossary_from_yaml("checkpoints/glossary.yaml")
+-
+-        YAML 文件格式:
+-            M.2:
+-              en: M dot two
+-              zh: M 二
+-            NVMe: N-V-M-E  # 中英文相同读法
+-        """
+-        if glossary_path and os.path.exists(glossary_path):
+-            import yaml
+-            with open(glossary_path, 'r', encoding='utf-8') as f:
+-                external_glossary = yaml.safe_load(f)
+-                if external_glossary and isinstance(external_glossary, dict):
+-                    self.term_glossary = external_glossary
+-                    return True
+-        return False
+-
+-    def save_glossary_to_yaml(self, glossary_path):
+-        """
+-        保存术语词汇表到 YAML 文件
+-
+-        Args:
+-            glossary_path: YAML 文件路径
+-        """
+-        import yaml
+-        with open(glossary_path, 'w', encoding='utf-8') as f:
+-            yaml.dump(self.term_glossary, f, allow_unicode=True, default_flow_style=False)
+ 
+     def save_pinyin_tones(self, original_text):
+         """
+@@ -511,10 +343,7 @@
+ 
+     @staticmethod
+     def split_segments_by_token(
+-        tokenized_str: List[str],
+-        split_tokens: List[str],
+-        max_text_tokens_per_segment: int,
+-        quick_streaming_tokens: int = 0
++        tokenized_str: List[str], split_tokens: List[str], max_text_tokens_per_segment: int
+     ) -> List[List[str]]:
+         """
+         将tokenize后的结果按特定token进一步分割
+@@ -529,17 +358,7 @@
+             token = tokenized_str[i]
+             current_segment.append(token)
+             current_segment_tokens_len += 1
+-            if not  ("," in split_tokens or "▁," in split_tokens ) and ("," in current_segment or "▁," in current_segment): 
+-                # 如果当前tokens中有,，则按,分割
+-                sub_segments = TextTokenizer.split_segments_by_token(
+-                    current_segment, [",", "▁,"], max_text_tokens_per_segment=max_text_tokens_per_segment, quick_streaming_tokens = quick_streaming_tokens
+-                )
+-            elif "-" not in split_tokens and "-" in current_segment:
+-                # 没有,，则按-分割
+-                sub_segments = TextTokenizer.split_segments_by_token(
+-                    current_segment, ["-"], max_text_tokens_per_segment=max_text_tokens_per_segment, quick_streaming_tokens = quick_streaming_tokens
+-                )
+-            elif current_segment_tokens_len <= max_text_tokens_per_segment:
++            if current_segment_tokens_len <= max_text_tokens_per_segment:
+                 if token in split_tokens and current_segment_tokens_len > 2:
+                     if i < len(tokenized_str) - 1:
+                         if tokenized_str[i + 1] in ["'", "▁'"]:
+@@ -551,6 +370,16 @@
+                     current_segment_tokens_len = 0
+                 continue
+             # 如果当前tokens的长度超过最大限制
++            if not  ("," in split_tokens or "▁," in split_tokens ) and ("," in current_segment or "▁," in current_segment): 
++                # 如果当前tokens中有,，则按,分割
++                sub_segments = TextTokenizer.split_segments_by_token(
++                    current_segment, [",", "▁,"], max_text_tokens_per_segment=max_text_tokens_per_segment
++                )
++            elif "-" not in split_tokens and "-" in current_segment:
++                # 没有,，则按-分割
++                sub_segments = TextTokenizer.split_segments_by_token(
++                    current_segment, ["-"], max_text_tokens_per_segment=max_text_tokens_per_segment
++                )
+             else:
+                 # 按照长度分割
+                 sub_segments = []
+@@ -571,19 +400,14 @@
+         if current_segment_tokens_len > 0:
+             assert current_segment_tokens_len <= max_text_tokens_per_segment
+             segments.append(current_segment)
+-        # 如果相邻的句子加起来长度小于最大限制，且此前token总数超过quick_streaming_tokens，则合并
++        # 如果相邻的句子加起来长度小于最大限制，则合并
+         merged_segments = []
+-        total_token = 0
+         for segment in segments:
+-            total_token += len(segment)
+             if len(segment) == 0:
+                 continue
+             if len(merged_segments) == 0:
+                 merged_segments.append(segment)
+-            elif len(merged_segments[-1]) + len(segment) <= max_text_tokens_per_segment and total_token > quick_streaming_tokens:
+-                merged_segments[-1] = merged_segments[-1] + segment
+-            # 或小于最大长度限制的一半，则合并
+-            elif len(merged_segments[-1]) + len(segment) <= max_text_tokens_per_segment / 2:
++            elif len(merged_segments[-1]) + len(segment) <= max_text_tokens_per_segment:
+                 merged_segments[-1] = merged_segments[-1] + segment
+             else:
+                 merged_segments.append(segment)
+@@ -598,16 +422,16 @@
+         "▁?",
+         "▁...", # ellipsis
+     ]
+-    def split_segments(self, tokenized: List[str], max_text_tokens_per_segment=120, quick_streaming_tokens = 0) -> List[List[str]]:
++    def split_segments(self, tokenized: List[str], max_text_tokens_per_segment=120) -> List[List[str]]:
+         return TextTokenizer.split_segments_by_token(
+-            tokenized, self.punctuation_marks_tokens, max_text_tokens_per_segment=max_text_tokens_per_segment, quick_streaming_tokens = quick_streaming_tokens
++            tokenized, self.punctuation_marks_tokens, max_text_tokens_per_segment=max_text_tokens_per_segment
+         )
+ 
+ 
+ if __name__ == "__main__":
+     # 测试程序
+ 
+-    text_normalizer = TextNormalizer(enable_glossary=True)
++    text_normalizer = TextNormalizer()
+ 
+     cases = [
+         "IndexTTS 正式发布1.0版本了，效果666",
+@@ -642,18 +466,12 @@
+         "babala2是什么？",  # babala二是什么?
+         "用beta1测试",  # 用beta一测试
+         "have you ever been to beta2?",  # have you ever been to beta two?
++        "such as XTTS, CosyVoice2, Fish-Speech, and F5-TTS",  # such as xtts,cosyvoice two,fish-speech,and f five-tts
+         "where's the money?",  # where is the money?
+         "who's there?",  # who is there?
+         "which's the best?",  # which is the best?
+         "how's it going?",  # how is it going?
+         "今天是个好日子 it's a good day",  # 今天是个好日子 it is a good day
+-        # 术语
+-        "such as XTTS, CosyVoice2, Fish-Speech, and F5-TTS",  # such as xtts,cosyvoice two,fish-speech,and f five-tts
+-        "GPT-5-Nano is the smallest and fastest variant in the GPT-5 model family.",  # GPT-five-Nano is the smallest and fastest variant in the GPT-five model family
+-        "GPT-5-Nano 是 GPT-5 模型家族中最小且速度最快的变体",  # GPT-五-Nano 是 GPT-五 系统中最小且速度最快的变体
+-        "2025/09/08 IndexTTS-2 全球发布",  # 二零二五年九月八日 IndexTTS-二全球发布
+-        "Here are some highly-rated M.2 NVMe SSDs: Samsung 9100 PRO PCIe 5.0 SSD M.2, $139.99",  # Here are some highly-rated M dot two NVMe SSD's, Samsung nine thousand one hundred PRO PCIE five SSD M dot two . one hundred and thirty nine dollars and ninety nine cents
+-        "we dive deep into the showdown between DisplayPort 1.4 and HDMI 2.1 to determine which is the best choice for gaming enthusiasts",
+         # 人名
+         "约瑟夫·高登-莱维特（Joseph Gordon-Levitt is an American actor）",
+         "蒂莫西·唐纳德·库克（英文名：Timothy Donald Cook），通称蒂姆·库克（Tim Cook），美国商业经理、工业工程师和工业开发商，现任苹果公司首席执行官。",

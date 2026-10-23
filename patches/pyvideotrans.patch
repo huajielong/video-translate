@@ -1,0 +1,1273 @@
+--- a/videotrans/task/_rate.py
++++ b/videotrans/task/_rate.py
+@@ -1,4 +1,5 @@
+ # 原理解释见 @docs/Synchronize.md
++# 源码地址 https://github.com/jianchang512/pyvideotrans/blob/main/videotrans/task/_rate.py
+ """
+ # 2026-0923 修改
+ 
+@@ -174,9 +175,6 @@
+ 
+         if target_duration <= 0: target_duration = 1
+ 
+-        if target_duration >= current_duration:
+-            return False
+-
+         time_stretch_rate = current_duration / target_duration
+ 
+         # 限制范围
+@@ -320,8 +318,29 @@
+         # 输出变速后的音频
+         self.target_audio = target_audio
+         # 超过 50 和 10 会发生致命错误
+-        self.max_audio_speed_rate = float(settings.get('max_audio_speed_rate', 50))
+-        self.max_video_pts_rate = float(settings.get('max_video_pts_rate', 10))
++        self.max_audio_speed_rate = float(
++            os.environ.get("VTV_MAX_AUDIO_SPEED_RATE")
++            or settings.get('max_audio_speed_rate', 50))
++        # 配音短于字幕区间时，允许轻微放慢以填补空档，减少句间长静音。
++        self.max_audio_slow_rate = float(
++            os.environ.get("VTV_MAX_AUDIO_SLOW_RATE")
++            or settings.get('max_audio_slow_rate', 1.15))
++        self.dubb_min_pause_ms = int(
++            os.environ.get("VTV_DUBB_MIN_PAUSE_MS")
++            or settings.get('dubb_min_pause_ms', 200))
++        # 自然短停顿：短句不为了填满槽位而放慢，只有超过该停顿的空档才填。
++        self.dubb_natural_pause_ms = int(
++            os.environ.get("VTV_DUBB_NATURAL_PAUSE_MS")
++            or settings.get('dubb_natural_pause_ms', 600))
++        self.max_video_pts_rate = float(
++            os.environ.get("VTV_MAX_VIDEO_PTS_RATE")
++            or settings.get('max_video_pts_rate', 10))
++        self.max_video_speedup_rate = float(
++            os.environ.get("VTV_MAX_VIDEO_SPEEDUP_RATE")
++            or settings.get('max_video_speedup_rate', 1.25))
++        self.max_phrase_pause_ms = int(
++            os.environ.get("VTV_MAX_PHRASE_PAUSE_MS")
++            or settings.get('max_phrase_pause_ms', 300))
+         # 存放待 音频加速 数据
+         self.audio_data = []
+         # 存放待视频慢速 数据
+@@ -416,7 +435,11 @@
+             if i < len(self.queue_tts) - 1:
+                 next_sub = self.queue_tts[i + 1]
+                 current['end_time'] = next_sub['start_time']
+-            current['start_time_source'] = current['start_time']
++            # 第0条已被强制 start_time=0，source 时长仍应从原始开始时刻算起，
++            # 否则首句会把开头 4-5 秒也当成自己的区间，补出一大段静音。
++            current['start_time_source'] = (
++                self.audio0_left_pad if i == 0 and self.audio0_left_pad
++                else current['start_time'])
+             current['end_time_source'] = current['end_time']
+             current['dubb_time'] = 0
+ 
+@@ -454,15 +477,30 @@
+ 
+             # 仅音频加速
+             if self.should_audiorate and not self.should_videorate:
+-                # 配音大于原字幕时长时，对音频做加速处理，短于时不处理，在合并时末尾加静音
++                # 配音长于区间时加速；短于区间时轻微放慢填补空档，避免句间长静音。
+                 ratio = 1.0
++                slow = 1.0
+                 if dubb_duration > source_duration:
+                     ratio = dubb_duration / source_duration
+                     if ratio > self.max_audio_speed_rate:
+                         audio_target = int(dubb_duration / self.max_audio_speed_rate)
+                     else:
+                         audio_target = source_duration
+-                # 存在音频加速并且不存在视频慢速时，注册音频加速的任务
++                else:
++                    # 默认保持 TTS 原速，不把音频拉伸到整个槽位。
++                    # 旧逻辑的 audio_target 仍是 source_duration，导致 gap 虽
++                    # 小于 natural，音频仍被 Rubberband 拉慢（日志里 0.83×）。
++                    # 只有空档超过 natural 时才放慢 1.05 填缝。
++                    audio_target = dubb_duration
++                    natural = max(self.dubb_min_pause_ms, self.dubb_natural_pause_ms)
++                    gap = source_duration - dubb_duration
++                    if gap > natural:
++                        room = source_duration - natural
++                        slow_target = min(room, int(dubb_duration * self.max_audio_slow_rate))
++                        if slow_target > dubb_duration:
++                            audio_target = slow_target
++                            slow = slow_target / dubb_duration
++                # 存在音频加速并且不存在视频慢速时，注册变速任务
+                 # 存在视频慢速时，无论是否选择音频加速，都会强制应用，区别仅在于视频慢速幅度不同
+                 self.audio_data.append({
+                     "filename": it['filename'],
+@@ -470,14 +508,30 @@
+                     "target_time": audio_target  # 变速结束后需达到的目标时长
+                 })
+                 logger.debug(
+-                    f'仅音频加速: {dubb_duration=}ms, {audio_target=}ms, ratio={min(ratio, self.max_audio_speed_rate)}')
++                    f'仅音频调整: {dubb_duration=}ms, {audio_target=}ms, '
++                    f'speed={min(ratio, self.max_audio_speed_rate):.2f}, slow={slow:.2f}')
+                 continue
+ 
+ 
+             # 仅视频慢速 或 两者都选中
+             mode_log = "[仅视频慢速]" if not self.should_audiorate and self.should_videorate else "[音频加速+视频慢速]"
+             if dubb_duration <= source_duration:
+-                mode_log+=f": 字幕{i} 可用区间: {source_duration}ms, 配音时长: {dubb_duration}ms, [无需变速]"
++                # Audio is shorter than the slot.  Shorten the video segment to
++                # audio + a natural pause instead of leaving the whole source
++                # gap as dead air (this was the 1-2s gap between phrases).
++                # Cap the speed-up so the picture does not become明显加速.
++                pause = max(self.dubb_min_pause_ms,
++                            min(self.dubb_natural_pause_ms,
++                                self.max_phrase_pause_ms))
++                target = dubb_duration + pause
++                floor = int(source_duration / max(1.0, self.max_video_speedup_rate))
++                # Keep the final clip at source length so the tail is not cut.
++                if i == len(self.queue_tts) - 1:
++                    video_target = source_duration
++                else:
++                    video_target = max(floor, min(source_duration, target))
++                mode_log += (f": 字幕{i} 可用区间: {source_duration}ms, "
++                             f"配音时长: {dubb_duration}ms, 视频目标: {video_target}ms")
+             else:
+                 slow_video_no=""
+                 # 仅视频慢速
+@@ -492,6 +546,15 @@
+                         # 音频加速和视频慢速各自负担一半时间差
+                         diff = dubb_duration - source_duration
+                         video_target = round(source_duration + (diff / 2))
++                        # 不让音频超过 max_audio_speed_rate：不够就多慢一点视频
++                        if self.max_audio_speed_rate > 0:
++                            video_target = max(
++                                video_target,
++                                int(dubb_duration / self.max_audio_speed_rate))
++                        # 视频慢速封顶，避免极端慢动作
++                        video_target = min(
++                            video_target,
++                            int(source_duration * self.max_video_pts_rate))
+                     else:
+                         slow_video_no=f" [仅音频加速可低于 {self.BOTH_MODE_AUDIO_ONLY_THRESHOLD}, 跳过视频慢速处理]"
+ 
+@@ -513,7 +576,7 @@
+         logger.debug(f"[音频加速] 使用{_wok}个进程，处理 {len(self.audio_data)} 个配音片段")
+         with ProcessPoolExecutor(max_workers=int(_wok)) as pool:
+             for i, d in enumerate(self.audio_data):
+-                if d['dubb_time'] > d['target_time']:
++                if abs(d['dubb_time'] - d['target_time']) > 5:
+                     all_task.append(pool.submit(
+                         _change_speed_rubberband if HAS_RUBBERBAND and self.audio_speed_rubberband else _precise_speed_up_audio,
+                         d['filename'], d['target_time'],i))
+@@ -555,8 +618,18 @@
+ 
+         processed_clips.sort(key=lambda x: x.get('tts_index', 0))
+         _total_ms = sum([it.get('actual_duration', 0) for it in processed_clips])
+-        # 无音频加速，无需处理，直接相连
++        # 无音频加速，无需处理音频，但必须把字幕/队列时间改到变速后的视频时间轴，
++        # 否则字幕仍按源时间显示，和慢放后的画面/音频错位。
+         if not self.should_audiorate:
++            st = 0
++            for i, it in enumerate(processed_clips):
++                if i >= len(self.queue_tts):
++                    break
++                actual = int(it.get("actual_duration") or it.get("target_time") or 0)
++                self.queue_tts[i]["start_time"] = st
++                self.queue_tts[i]["end_time"] = st + actual
++                self.queue_tts[i]["source_duration"] = actual
++                st += actual
+             return processed_clips, _total_ms
+ 
+         if len(processed_clips) != len(self.queue_tts):
+@@ -576,10 +649,19 @@
+             st=ed
+ 
+         for i, it in enumerate(self.queue_tts):
++            target = it['source_duration']
++            dubb = it['dubb_time']
++            # 视频段已经定长；音频短时轻微放慢填缝，但保留 min_pause 停顿。
++            if dubb < target - self.dubb_min_pause_ms:
++                slow_target = min(
++                    target - self.dubb_min_pause_ms,
++                    int(dubb * self.max_audio_slow_rate))
++                if slow_target > dubb:
++                    target = slow_target
+             tmp={
+                 "filename": it['filename'],
+-                "dubb_time": it['dubb_time'],  # 变速前实际配音时长
+-                "target_time": it['source_duration']
++                "dubb_time": dubb,  # 变速前实际配音时长
++                "target_time": target
+             }
+             self.audio_data.append(tmp)
+ 
+@@ -795,7 +877,12 @@
+         self.concat_video_is_end=False
+         threading.Thread(target=self._hebing_pro, args=(protxt,tr('Concatenating final audio')), daemon=True).start()
+         # 强制使用 cache_folder 作为 cwd，避免相对路径问题
+-        cmd = ['-y', "-progress",protxt,'-f', 'concat', '-safe', '0', '-i', concat_txt, '-c:a', 'copy', temp_wav]
++        # Force a single, known output format.  With `-c:a copy` a corrupt or
++        # odd sample-rate file from a failed TTS line becomes the first stream
++        # and poisons the whole track (observed: 11.025 kHz -> 90 min output).
++        cmd = ['-y', "-progress", protxt, '-f', 'concat', '-safe', '0',
++               '-i', concat_txt, '-ar', '48000', '-ac', '2',
++               '-c:a', 'pcm_s16le', temp_wav]
+         tools.runffmpeg(cmd, force_cpu=True, cmd_dir=self.cache_folder)
+         self.concat_video_is_end=True
+         if Path(temp_wav).exists():
+--- a/videotrans/task/_stage_align.py
++++ b/videotrans/task/_stage_align.py
+@@ -1,15 +1,106 @@
+ import os
++import re
+ import shutil
+ import time
+ from pathlib import Path
+ 
+-from videotrans.configure.config import tr, logger
+-from videotrans.tts import EDGE_TTS, AZURE_TTS
++from pydub import AudioSegment
++from videotrans.configure.config import tr, logger, settings
++from videotrans.configure import constants
++from videotrans.tts import  SUPPORT_VOLUME
+ from videotrans.util.help_ffmpeg import get_video_duration, runffmpeg
+ from videotrans.util.help_misc import vail_file, is_novoice_mp4
+ from videotrans.util.help_srt import ms_to_time_string, delete_punc
+ 
+ 
++_ONE_LINE_BREAK = set("，,、；;：:。！？.!?…")
++
++
++def _split_one_line(text: str, limit: int) -> list[str]:
++    """Split text into one-line display cues at punctuation/space."""
++    text = re.sub(r"\s+", " ", (text or "")).strip()
++    if not text:
++        return []
++    if len(text) <= limit:
++        return [text]
++    out: list[str] = []
++    rest = text
++    while len(rest) > limit:
++        window = rest[:limit + 1]
++        cut = -1
++        for i in range(len(window) - 1, max(0, limit // 2), -1):
++            if window[i - 1] in _ONE_LINE_BREAK or window[i - 1].isspace():
++                cut = i
++                break
++        if cut <= 0:
++            cut = limit
++        out.append(rest[:cut].strip())
++        rest = rest[cut:].strip()
++    if rest:
++        out.append(rest)
++    return [c for c in out if c]
++
++
++def _trim_tts_silence(path: str) -> tuple[str, int]:
++    """Trim TTS edge noise and add an 80ms pure-silence pre/post roll.
++
++    TTS output can carry a low-level breath/noise at the first/last phoneme.
++    Keeping 120ms of that edge and joining clips produced an audible "嗖".
++    Here the speech is cut exactly at the first/last non-silent sample, the
++    edges get a 20ms fade, and clean digital silence (80ms) is prepended and
++    appended instead.  The 80ms pre-roll also masks the next clip's onset.
++    """
++    try:
++        audio = AudioSegment.from_file(path).set_frame_rate(48000).set_channels(2)
++        ranges = audio.detect_nonsilent(min_silence_len=100, silence_thresh=-35)
++        if not ranges:
++            return path, len(audio)
++        seg = audio[ranges[0][0]:ranges[-1][1]]
++        if len(seg) <= 60:
++            return path, len(audio)
++        seg = seg.fade_in(20).fade_out(20)
++        pad = AudioSegment.silent(duration=80, frame_rate=48000).set_channels(2)
++        seg = pad + seg + pad
++        out = Path(path).with_name(Path(path).stem + ".pre80.wav")
++        if (not out.exists()
++                or out.stat().st_mtime < Path(path).stat().st_mtime):
++            seg.export(out, format="wav")
++        return str(out), len(seg)
++    except Exception:
++        return path, 0
++
++
++def _display_items(queue: list[dict], target_lang: str) -> list[dict]:
++    """One-line display cues inside each TTS unit's final timeline."""
++    if target_lang[:2] in constants.CJK_LANG:
++        limit = int(os.environ.get("VTV_CJK_LEN", 0)
++                    or settings.get("cjk_len", 22))
++    else:
++        limit = int(settings.get("other_len", 60))
++    items: list[dict] = []
++    for it in queue:
++        chunks = _split_one_line(it.get("text", ""), max(8, limit))
++        if not chunks:
++            continue
++        start = int(it.get("start_time") or 0)
++        end = int(it.get("end_time") or start)
++        span = max(1, end - start)
++        total = sum(max(1, len(c)) for c in chunks)
++        cursor = start
++        first = len(items)
++        for chunk in chunks:
++            dur = span * len(chunk) / total
++            items.append({
++                "startraw": ms_to_time_string(ms=int(round(cursor))),
++                "endraw": ms_to_time_string(ms=int(round(cursor + dur))),
++                "text": chunk,
++            })
++            cursor += dur
++        if len(items) > first:
++            items[-1]["endraw"] = ms_to_time_string(ms=end)
++    return items
++
++
+ class AlignMixin:
+ 
+     def align(self) -> None:
+@@ -28,7 +119,17 @@
+             self.video_time = get_video_duration(self.cfg.novoice_mp4)
+         from videotrans.task._rate import SpeedRate
+ 
+-        
++        # Trim TTS edge silence: a raw 1-2s lead/tail becomes an audible gap
++        # between phrases when audio is kept at native speed.
++        if os.environ.get("VTV_TTS_SRT"):
++            for it in self.queue_tts:
++                fn = it.get("filename")
++                if fn and Path(fn).is_file():
++                    trimmed, dur = _trim_tts_silence(fn)
++                    it["filename"] = trimmed
++                    if dur:
++                        it["dubb_time"] = dur
++
+         rate_inst = SpeedRate(
+             queue_tts=self.queue_tts,
+             uuid=self.uuid,
+@@ -52,10 +153,20 @@
+             it['text']=it['text'].strip('...')
+             if self.cfg.fix_punc==2:
+                 it['text']=delete_punc(it['text'])
+-        # 不嵌入字幕，则在此保存修改后的目标字幕
+-        self._save_srt_target(self.queue_tts, self.cfg.target_sub)
++        # 单语字幕：无论是否有 TTS 语义单元，都把最终队列按一行宽度重新切条，
++        # 并按变速后的时间轴分配；否则 fit 兜底/未命中 TTS 单元时会留下 2 行字幕。
++        # 双语字幕必须保持源/目标 1:1 配对，仍直接写 queue。
++        subtitle_type = int(getattr(self.cfg, "subtitle_type", 1) or 1)
++        if subtitle_type not in (3, 4):
++            display = _display_items(self.queue_tts, self.cfg.target_language_code)
++            if display:
++                self._save_srt_target(display, self.cfg.target_sub)
++            else:
++                self._save_srt_target(self.queue_tts, self.cfg.target_sub)
++        else:
++            self._save_srt_target(self.queue_tts, self.cfg.target_sub)
+             
+-        if self.cfg.tts_type not in [EDGE_TTS, AZURE_TTS] and self.cfg.volume != '+0%' and vail_file(
++        if self.cfg.tts_type not in SUPPORT_VOLUME and self.cfg.volume != '+0%' and vail_file(
+                 self.cfg.target_wav):
+             volume = self.cfg.volume.replace('%', '').strip()
+             try:
+--- a/videotrans/task/_stage_subtitle.py
++++ b/videotrans/task/_stage_subtitle.py
+@@ -25,7 +25,9 @@
+ 
+         process_end_subtitle = self.cfg.cache_folder + f'/end.srt'
+         maxlen = int(
+-            settings.get('cjk_len', 15) if self.cfg.target_language_code[:2] in constants.CJK_LANG else
++            os.environ.get("VTV_CJK_LEN", 0)
++            or settings.get('cjk_len', 22)
++            if self.cfg.target_language_code[:2] in constants.CJK_LANG else
+             settings.get('other_len', 60))
+         target_sub_list = get_subtitle_from_srt(self.cfg.target_sub)
+ 
+@@ -35,7 +37,9 @@
+             source_sub_list = get_subtitle_from_srt(self.cfg.source_sub)
+             source_length = len(source_sub_list)
+             source_maxlen = int(
+-                settings.get('cjk_len', 15) if self.cfg.source_language_code.split('-')[0] in constants.CJK_LANG   else
++                os.environ.get("VTV_CJK_LEN", 0)
++                or settings.get('cjk_len', 22)
++                if self.cfg.source_language_code.split('-')[0] in constants.CJK_LANG else
+                 settings.get('other_len', 60))
+ 
+             _join_flag = self._get_join_flag()
+--- a/videotrans/tts/_index.py
++++ b/videotrans/tts/_index.py
+@@ -1,4 +1,11 @@
++import ctypes
++import json
++import os
++import subprocess
++import time
++import urllib.request
+ from dataclasses import dataclass
++from pathlib import Path
+ from typing import List, Dict, Union
+ 
+ from gradio_client import handle_file
+@@ -12,6 +19,70 @@
+ METHOD_TEXT_CN='与音色参考音频相同'
+ REAL_USE=METHOD_TEXT_EN
+ 
++_DIRECT_COUNT = 0
++_PINNED_PID = None
++_PIN_CHECK = 0
++
++
++def _pin_daemon(api: str) -> None:
++    """Pin the real daemon to P-cores and High priority.
++
++    The uv launcher means the PID returned by Popen is not the process that
++    runs GPT decode; the /health daemon.pid is.  On this laptop the decode
++    thread otherwise migrates to an E-core and RTF jumps from ~2 to ~7.
++    """
++    global _PINNED_PID, _PIN_CHECK
++    if os.name != "nt" or os.environ.get("VTV_PIN_DAEMON", "1") in (
++            "0", "false", "False", ""):
++        return
++    _PIN_CHECK += 1
++    if _PINNED_PID is not None and _PIN_CHECK % 5 != 0:
++        return
++    try:
++        with urllib.request.urlopen(f"{api}/health", timeout=5) as resp:
++            health = json.loads(resp.read().decode("utf-8"))
++        pid = int((health.get("daemon") or {}).get("pid") or 0)
++        if not pid or pid == _PINNED_PID:
++            return
++        handle = ctypes.windll.kernel32.OpenProcess(0x0200 | 0x0400, False, pid)
++        if handle:
++            ctypes.windll.kernel32.SetPriorityClass(handle, 0x00000080)  # HIGH
++            ctypes.windll.kernel32.SetProcessAffinityMask(handle, 0xFFFF)  # P-cores
++            ctypes.windll.kernel32.CloseHandle(handle)
++            _PINNED_PID = pid
++    except Exception:  # noqa: BLE001
++        pass
++
++
++def _maybe_restart_direct() -> None:
++    """Reset the IndexTTS2 daemon before its per-process slowdown sets in.
++
++    The Gradio shim used to do this.  The direct path bypasses the shim, so it
++    must own the counter; otherwise the daemon degrades from RTF ~1.6 to ~5+
++    after roughly ten requests and never recovers.
++    """
++    global _DIRECT_COUNT
++    _DIRECT_COUNT += 1
++    every = int(os.environ.get("INDEXTTS2_RESTART_EVERY", "25") or 0)
++    cli = os.environ.get("INDEXTTS2_CLI", "")
++    if not every or _DIRECT_COUNT % every != 0:
++        return
++    py = os.environ.get("VTV_ITT_PYTHON", "")
++    entry = os.path.join(os.environ.get("INDEXTTS2_HOME", ""), "scripts", "indextts2.py")
++    if py and os.path.isfile(entry):
++        cmd = [py, entry, "stop", "--json"]
++    elif cli:
++        cmd = [cli, "stop", "--json"]
++    else:
++        return
++    try:
++        subprocess.run(cmd, timeout=120,
++                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
++        time.sleep(1)
++    except Exception:  # noqa: BLE001
++        pass
++
++
+ @dataclass(repr=False)
+ class IndexTTS(GradioBase):
+     def __post_init__(self):
+@@ -19,9 +90,46 @@
+         super().__post_init__()
+ 
+ 
++    def _direct(self, data_item: Dict) -> None:
++        """POST straight to IndexTTS2's native /v1/tts, skipping Gradio.
++
++        The Gradio client uploads the reference and queues every subtitle line;
++        that round-trip dominated the per-line wall clock (RTF ~5 vs ~1.6).
++        """
++        api = os.environ.get("INDEXTTS2_API", "http://127.0.0.1:8791").rstrip("/")
++        ref_wav, _ = self.get_ref_wav(data_item)
++        fast = os.environ.get("INDEXTTS2_FAST", "1") not in ("0", "false", "False", "")
++        payload = json.dumps({
++            "text": data_item["text"].strip(),
++            "voice": ref_wav,
++            "output_name": f"pyvt_{int(time.time() * 1000)}_{os.getpid()}_{data_item['line']}.wav",
++            "fast": fast,
++        }).encode("utf-8")
++        last = None
++        for _attempt in range(3):
++            try:
++                req = urllib.request.Request(
++                    f"{api}/v1/tts", data=payload,
++                    headers={"Content-Type": "application/json"})
++                with urllib.request.urlopen(req, timeout=3600) as resp:
++                    data = json.loads(resp.read().decode("utf-8"))
++                out = data.get("output_path") or (data.get("result") or {}).get("output_path")
++                if not out or not Path(out).is_file():
++                    raise RuntimeError(str(data)[:300])
++                self.convert_to_wav(out, data_item["filename"])
++                _maybe_restart_direct()
++                _pin_daemon(api)
++                return
++            except Exception as exc:  # noqa: BLE001
++                last = exc
++                time.sleep(2)
++        raise RuntimeError(f"IndexTTS2 direct API failed: {last}")
++
+     def _run(self, data_item: Union[Dict, List, None], idx: int = -1) -> Union[str, None]:
+         global REAL_USE
+         if vail_file(data_item['filename']):return
++        if os.environ.get("INDEXTTS2_DIRECT", "1") not in ("0", "false", "False", ""):
++            return self._direct(data_item)
+         ref_wav,ref_text = self.get_ref_wav(data_item)
+         kwargs = {
+             "prompt": handle_file(ref_wav),
+--- a/videotrans/configure/_paths.py
++++ b/videotrans/configure/_paths.py
+@@ -13,7 +13,8 @@
+ LOGS_DIR = f'{ROOT_DIR}/logs'
+ 
+ TRANSLATE_CACHE = f'{TEMP_ROOT}/translate_cache'
+-DUBBING_CACHE = f'{TEMP_ROOT}/dubbing_cache'
++# Allow cache isolation for A/B tests: VTV_DUBBING_CACHE=/path/to/cache
++DUBBING_CACHE = os.environ.get("VTV_DUBBING_CACHE") or f'{TEMP_ROOT}/dubbing_cache'
+ 
+ # 单视频模式时重新进行配音，队列数据文件和停止标识文件
+ REDUBB_QUEUE_FILE=f'{TEMP_ROOT}/redubbing.json'
+--- a/videotrans/task/_stage_dubbing.py
++++ b/videotrans/task/_stage_dubbing.py
+@@ -1,15 +1,525 @@
+ import copy
++import hashlib
++import json
++import os
+ import re
+ import shutil
++import subprocess
+ import time
+ from pathlib import Path
+ 
+ from videotrans.configure._paths import DUBBING_CACHE
+-from videotrans.configure.config import tr, app_cfg, settings, logger
++from videotrans.configure.config import tr, app_cfg, params, settings, logger, ROOT_DIR
+ from videotrans.configure.excepts import DubbingSrtError
+-from videotrans.tts import run as run_tts, SUPPORT_CLONE
++from videotrans.tts import run as run_tts, SUPPORT_CLONE, INDEX_TTS
+ from videotrans.util.help_misc import get_md5, vail_file
+-from videotrans.util.help_srt import get_subtitle_from_srt, delete_punc
++from videotrans.util.help_srt import get_subtitle_from_srt, delete_punc, simple_wrap
++
++
++def _source_by_overlap(source_subs, start, end):
++    """Return the source block with the largest time overlap with [start,end]."""
++    best, best_overlap = None, 0
++    for src in source_subs or []:
++        overlap = min(end, src['end_time']) - max(start, src['start_time'])
++        if overlap > best_overlap:
++            best, best_overlap = src, overlap
++    return best
++
++
++def _clone_ref_mode() -> str:
++    return (os.environ.get("VTV_CLONE_REF_MODE") or "cluster").strip().lower()
++
++
++def _itt_python() -> str:
++    explicit = os.environ.get("VTV_ITT_PYTHON", "")
++    if explicit and Path(explicit).is_file():
++        return explicit
++    home = os.environ.get("INDEXTTS2_HOME", "")
++    if home:
++        for rel in ("venv/Scripts/python.exe", "venv/python.exe"):
++            p = Path(home) / rel
++            if p.is_file():
++                return str(p)
++    return ""
++
++
++def _use_single_ref(items, ref_path: str, cache_folder: str) -> None:
++    fixed_ref = str(Path(cache_folder) / "clone_fixed.wav")
++    shutil.copy2(ref_path, fixed_ref)
++    for it in items:
++        if it.get("ref_wav"):
++            it["ref_wav"] = fixed_ref
++
++
++def _cluster_refs(items, cache_folder: str) -> dict | None:
++    """Ask the IndexTTS2 venv to cluster per-line clips into speakers."""
++    py = _itt_python()
++    home = os.environ.get("INDEXTTS2_HOME", "")
++    helper = Path(__file__).resolve().parents[4] / "scripts" / "speaker_cluster.py"
++    if not py or not home or not helper.is_file():
++        logger.warning("speaker clustering skipped: missing python/home/helper")
++        return None
++    payload = [{"line": it["line"], "path": it["ref_wav"]}
++               for it in items
++               if it.get("ref_wav") and Path(it["ref_wav"]).is_file()]
++    if len(payload) < 2:
++        return None
++    inp = Path(cache_folder) / "speaker_items.json"
++    out = Path(cache_folder) / "speaker_clusters.json"
++    inp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
++    env = os.environ.copy()
++    env["INDEXTTS2_HOME"] = home
++    site = os.environ.get("VTV_ITT_SITE", "")
++    if site:
++        prev = env.get("PYTHONPATH", "")
++        env["PYTHONPATH"] = site + (os.pathsep + prev if prev else "")
++    try:
++        cp = subprocess.run(
++            [py, str(helper), "--items", str(inp), "--out", str(out)],
++            capture_output=True, text=True, timeout=900, env=env,
++            encoding="utf-8", errors="replace")
++        if cp.returncode != 0 or not out.is_file():
++            logger.warning(f"speaker clustering failed rc={cp.returncode}: "
++                           f"{(cp.stderr or '')[-500:]}")
++            return None
++        return json.loads(out.read_text(encoding="utf-8"))
++    except Exception as exc:  # noqa: BLE001
++        logger.warning(f"speaker clustering skipped: {exc}")
++        return None
++
++
++def _apply_cluster_refs(items, result: dict) -> int:
++    assign = result.get("assign") or {}
++    reps = result.get("reps") or {}
++    changed = 0
++    for it in items:
++        cid = assign.get(str(it.get("line")))
++        rep = reps.get(str(cid)) if cid is not None else None
++        if rep and Path(rep).is_file():
++            if it.get("ref_wav") != rep:
++                changed += 1
++            it["ref_wav"] = rep
++    return changed
++
++
++# ---------------------------------------------------------------------------
++# Dubbing-unit fitting: merge short fragments and condense over-long lines.
++#
++# The ASR/VTT segmentation is optimised for reading, not for TTS.  A 5-char
++# fragment in a 0.7 s slot still takes ~1.6 s of IndexTTS2 audio because the
++# model has a fixed per-utterance overhead, so the old per-line alignment had
++# to speed it up 2-3x.  Merging adjacent same-speaker fragments (when they are
++# contiguous) lets them share that overhead and gives the line a real slot.
++# Long lines are condensed separately when merging cannot create enough room.
++# Both steps are text/timing only; the per-line TTS cache keys are rebuilt so
++# unchanged lines still hit the cache.
++# ---------------------------------------------------------------------------
++def _fit_flag(name: str, default: bool = True) -> bool:
++    value = os.environ.get(name)
++    if value is None:
++        return default
++    return value.strip().lower() not in ("0", "false", "no", "off", "")
++
++
++def _fit_float(name: str, default: float) -> float:
++    try:
++        return float(os.environ.get(name) or default)
++    except (TypeError, ValueError):
++        return default
++
++
++def _fit_int(name: str, default: int) -> int:
++    try:
++        return int(os.environ.get(name) or default)
++    except (TypeError, ValueError):
++        return default
++
++
++def _fit_chars(text: str) -> int:
++    return len(re.sub(r"\s", "", text or ""))
++
++
++_FIT_CONTINUATIONS = (
++    "无论", "而", "但", "所以", "因为", "如果", "当", "因此", "然而", "不过",
++    "同时", "此外", "最后", "然后", "首先", "其次", "还有", "以及", "并", "且",
++    "也", "就", "则",
++)
++
++
++def _fit_join_text(first: str, second: str) -> str:
++    """Join two subtitle fragments without keeping the bridging ellipsis."""
++    a = re.sub(r"(?:\.{3}|…+)\s*$", "", (first or "").strip()).strip()
++    b = re.sub(r"^(?:\.{3}|…+)\s*", "", (second or "").strip()).strip()
++    if not a:
++        return b
++    if not b:
++        return a
++    if (not _fit_ends_sentence(a)
++            and not a.endswith(("，", ",", "、", "；", ";", "：", ":"))
++            and b.startswith(_FIT_CONTINUATIONS)):
++        return a + "，" + b
++    sep = " " if re.search(r"[A-Za-z0-9]$", a) and re.match(r"[A-Za-z0-9]", b) else ""
++    return a + sep + b
++
++
++def _fit_base_key(item: dict, target_lang: str) -> str:
++    """Same key formula as the dubbing stage, recomputed after text edits."""
++    return get_md5(
++        f"{target_lang}-{item.get('text', '')}-{item.get('role', '')}-"
++        f"{item.get('rate', '+0%')}-{item.get('volume', '+0%')}-"
++        f"{item.get('pitch', '+0Hz')}-{item.get('tts_type', 0)}-"
++        f"{settings.get('remove_dubb_silence', True)}-"
++        f"{settings.get('remove_dubb_all_silence', True)}-"
++        f"{settings.get('remove_dubb_silence_level', 'default')}")
++
++
++def _fit_cached_ms(item: dict, ref_cache: dict) -> int:
++    """Actual duration of this exact line if it is already in DUBBING_CACHE.
++
++    Cached audio is often more reliable than the linear predictor (short lines
++    vary by ±1s), and it lets a re-run condense the lines that were actually
++    too fast.  New/merged lines return 0 and use the predictor.
++    """
++    try:
++        ref = item.get("ref_wav") or ""
++        is_clone = str(item.get("role", "")).strip().lower() == "clone"
++        tag = _ref_tag(ref, ref_cache) if is_clone and ref else ""
++        key = get_md5(f"{item['base_key']}-ref-{tag}") if tag else item["base_key"]
++        path = Path(DUBBING_CACHE) / f"{key}.wav"
++        if not path.is_file():
++            return 0
++        try:
++            import soundfile as sf
++            return int(sf.info(str(path)).duration * 1000)
++        except Exception:
++            import wave
++            with wave.open(str(path), "rb") as w:
++                return int(w.getnframes() * 1000 / w.getframerate())
++    except Exception:
++        return 0
++
++
++_FIT_SENT_END = set("。！？.!?…")
++
++
++def _fit_ends_sentence(text: str) -> bool:
++    """True only for real sentence terminators; commas/colons are mid-sentence."""
++    text = (text or "").rstrip()
++    return bool(text) and text[-1] in _FIT_SENT_END
++
++
++def _fit_merge_queue(queue: list[dict], *, target_lang: str, max_speed: float,
++                     max_chars: int, gap_ms: int, pred_a: float, pred_b: float,
++                     line_roles: dict | None, total_ms: int,
++                     wrap_width: int = 22) -> tuple[list[dict], int]:
++    """Merge adjacent same-speaker fragments while the merged text fits.
++
++    A candidate pair is merged when at least one side is over ``max_speed``
++    and the merged unit is either under the target or clearly better than the
++    worst side.  The worst offender is merged first so a tight neighbour is
++    not stolen by a less urgent pair.
++    """
++    if len(queue) < 2:
++        return queue, 0
++
++    def pred(chars: int) -> float:
++        return pred_a + pred_b * chars
++
++    groups: list[dict] = []
++    for it in queue:
++        text = re.sub(r"\s+", " ", (it.get("text") or "")).strip()
++        groups.append({
++            "text": text,
++            "chars": _fit_chars(text),
++            "start": int(it.get("start_time") or 0),
++            "end": int(it.get("end_time") or 0),
++            "startraw": it.get("startraw", ""),
++            "endraw": it.get("endraw", ""),
++            "ref": (it.get("_fit_speaker")
++                    if it.get("_fit_speaker") is not None
++                    else (it.get("ref_wav") or it.get("role", ""))),
++            "role": it.get("role", ""),
++            "rate": it.get("rate", ""),
++            "volume": it.get("volume", ""),
++            "pitch": it.get("pitch", ""),
++            "tts_type": it.get("tts_type", 0),
++            "actual": int(it.get("_fit_cached_ms") or 0),
++            "fixed": bool(line_roles and str(it.get("line")) in line_roles),
++            "items": [it],
++        })
++
++    def ratio(group: dict, slot_ms: int) -> float:
++        # Merge decisions use the fixed-overhead model, not cached durations:
++        # old per-line audio was synthesized without the merge, and using it
++        # here made the worst-first pass leave isolated short fragments.
++        return pred(group["chars"]) * 1000.0 / max(1, slot_ms)
++
++    merges = 0
++    while True:
++        best = None
++        n = len(groups)
++        for i in range(n - 1):
++            a, b = groups[i], groups[i + 1]
++            if a["fixed"] or b["fixed"]:
++                continue
++            if a["ref"] != b["ref"]:
++                continue
++            if (a["role"], a["rate"], a["volume"], a["pitch"], a["tts_type"]) != \
++                    (b["role"], b["rate"], b["volume"], b["pitch"], b["tts_type"]):
++                continue
++            if b["start"] - a["end"] > gap_ms:
++                continue
++            text = _fit_join_text(a["text"], b["text"])
++            chars = _fit_chars(text)
++            if not text or chars > max_chars:
++                continue
++            try:
++                if len(simple_wrap(text, wrap_width, target_lang).splitlines()) > 2:
++                    continue
++            except Exception:
++                pass
++            next_start = groups[i + 2]["start"] if i + 2 < n else (total_ms or b["end"])
++            merged_slot = next_start - a["start"]
++            ra = ratio(a, b["start"] - a["start"])
++            rb = ratio(b, next_start - b["start"])
++            rn = ratio({"chars": chars}, merged_slot)
++            worst = max(ra, rb)
++            # A line that does not end with a sentence terminator and is
++            # followed by the same speaker within a natural pause is one
++            # sentence cut in two by ASR/translation.  Merge it even when
++            # neither side is over speed, so the TTS phrase is not broken.
++            semantic = (not _fit_ends_sentence(a["text"])) and (
++                b["start"] - a["end"] <= max(gap_ms, 900))
++            if semantic:
++                candidate = ((2.0 + worst, 0.0), i, text, chars)
++            else:
++                if worst <= max_speed:
++                    continue
++                improvement = worst - rn
++                if not ((rn <= max_speed and improvement >= 0.05)
++                        or (improvement >= 0.15 and rn < worst)):
++                    continue
++                candidate = ((worst, improvement), i, text, chars)
++            if best is None or candidate[0] > best[0]:
++                best = candidate
++        if best is None:
++            break
++        _, i, text, chars = best
++        a, b = groups[i], groups[i + 1]
++        groups[i:i + 2] = [{
++            "text": text,
++            "chars": chars,
++            "start": a["start"],
++            "end": b["end"],
++            "startraw": a["startraw"],
++            "endraw": b["endraw"],
++            "ref": a["ref"],
++            "role": a["role"],
++            "rate": a["rate"],
++            "volume": a["volume"],
++            "pitch": a["pitch"],
++            "tts_type": a["tts_type"],
++            "actual": 0,
++            "fixed": a["fixed"] or b["fixed"],
++            "items": a["items"] + b["items"],
++        }]
++        merges += 1
++
++    out: list[dict] = []
++    for idx, group in enumerate(groups):
++        items = group["items"]
++        if len(items) == 1:
++            it = dict(items[0])
++        else:
++            it = dict(items[0])
++            it["text"] = group["text"]
++            it["end_time"] = group["end"]
++            it["endraw"] = group["endraw"]
++            ref_text = " ".join(x.get("ref_text", "").strip()
++                                for x in items if x.get("ref_text", "").strip())
++            it["ref_text"] = ref_text
++        it["line"] = idx + 1
++        it["_idx"] = idx
++        it["filename"] = ""
++        it["dubbing_key"] = ""
++        if len(items) > 1:
++            it["base_key"] = _fit_base_key(it, target_lang)
++            it["_fit_cached_ms"] = 0
++        out.append(it)
++    return out, merges
++
++
++def _fit_clean_condense(text: str) -> str:
++    text = (text or "").strip().strip('"\'“”‘’').strip()
++    text = re.sub(r"^(?:改写|输出|结果|译文)\s*[:：]\s*", "", text)
++    text = re.sub(r"^\d+\s*[|.、:：]\s*", "", text)
++    for line in text.splitlines():
++        line = line.strip().strip('"\'“”‘’').strip()
++        if line:
++            return line
++    return ""
++
++
++def _fit_condense_text(text: str, target_chars: int, cache: dict,
++                       cache_path: Path, target_lang: str) -> str:
++    key = get_md5(f"{text}-{target_chars}-{target_lang}")
++    if key in cache and _fit_chars(cache[key]) <= target_chars + 2:
++        return cache[key]
++    api_key = os.environ.get("DEEPSEEK_API_KEY") or params.get("deepseek_key", "")
++    if not api_key:
++        return ""
++    try:
++        from openai import OpenAI
++        client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1/",
++                       timeout=60.0, max_retries=1)
++        model = params.get("deepseek_model") or "deepseek-flash"
++        best = ""
++        # First ask for the exact budget; if the model overshoots (common when
++        # the line contains a long technical token), retry once with a tighter
++        # budget and an explicit "must be shorter" instruction.
++        for attempt in range(2):
++            budget = target_chars if attempt == 0 else max(4, target_chars - 3)
++            low = max(4, budget - 2)
++            prompt = (
++                "你是中文配音脚本编辑。把下面这句字幕改写得能自然说完，"
++                f"尽量接近 {budget} 个汉字（不要少于 {low} 个，绝不超过 {budget} 个）。\n"
++                "要求：保留原意、数字和技术术语；删掉多余的代词、语气词、重复和客套；"
++                "不要解释，不要加引号，只输出改写后的这一句。\n"
++            )
++            if attempt:
++                prompt += "上一版仍然太长；这次必须更短，优先删修饰语和例子。\n"
++            prompt += f"\n原文：{text}"
++            resp = client.chat.completions.create(
++                model=model,
++                messages=[{"role": "user", "content": prompt}],
++                temperature=0.2,
++                max_tokens=512,
++                # deepseek-flash is a reasoning model; without this the whole
++                # budget is spent on hidden reasoning and content comes back empty.
++                extra_body={"thinking": {"type": "disabled"}},
++            )
++            out = _fit_clean_condense(resp.choices[0].message.content or "")
++            if not out:
++                continue
++            if not best or _fit_chars(out) < _fit_chars(best):
++                best = out
++            if _fit_chars(out) <= target_chars + 2:
++                break
++    except Exception as exc:  # noqa: BLE001
++        logger.warning(f"[fit] condense failed: {exc}")
++        return ""
++    out = best
++    if not out:
++        return ""
++    if _fit_chars(out) > target_chars + 2:
++        logger.warning(f"[fit] condense over target: {_fit_chars(out)} > {target_chars}")
++    cache[key] = out
++    try:
++        cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
++    except Exception:
++        pass
++    return out
++
++
++def _fit_glossary_terms() -> list[tuple[str, list[str]]]:
++    path = os.environ.get("VTV_GLOSSARY_FILE") or f"{ROOT_DIR}/videotrans/glossary.txt"
++    terms: list[tuple[str, list[str]]] = []
++    try:
++        for line in Path(path).read_text(encoding="utf-8-sig", errors="replace").splitlines():
++            line = line.strip()
++            if not line or "=" not in line:
++                continue
++            src, tgt = line.split("=", 1)
++            variants = [re.sub(r"\s+", "", v) for v in tgt.split("|") if v.strip()]
++            if variants:
++                terms.append((src.strip(), variants))
++    except Exception:
++        pass
++    return terms
++
++
++def _fit_terms_kept(original: str, short: str,
++                    terms: list[tuple[str, list[str]]]) -> bool:
++    orig = re.sub(r"\s+", "", original or "")
++    new = re.sub(r"\s+", "", short or "")
++    for _, variants in terms:
++        if any(v in orig for v in variants) and not any(v in new for v in variants):
++            return False
++    for token in set(re.findall(r"[A-Za-z][A-Za-z0-9_+.\-/]{2,}", original or "")):
++        if token not in short:
++            return False
++    return True
++
++
++def _fit_condense_queue(queue: list[dict], *, target_lang: str, cache_folder: str,
++                        total_ms: int, max_speed: float, pred_a: float,
++                        pred_b: float, target_speed: float) -> int:
++    """Shorten merged units that are still predicted to be spoken too fast."""
++    if not queue:
++        return 0
++    cache_path = Path(cache_folder) / "fit_condense_cache.json"
++    try:
++        cache = json.loads(cache_path.read_text(encoding="utf-8"))
++    except Exception:
++        cache = {}
++    terms = _fit_glossary_terms()
++    changed = 0
++    for i, it in enumerate(queue):
++        text = it.get("text", "")
++        chars = _fit_chars(text)
++        slot = (queue[i + 1]["start_time"] if i + 1 < len(queue)
++                else (total_ms or it.get("end_time", 0))) - it.get("start_time", 0)
++        if slot <= 0:
++            continue
++        actual = int(it.get("_fit_cached_ms") or 0)
++        duration_ms = actual or (pred_a + pred_b * chars) * 1000.0
++        ratio = duration_ms / slot
++        if ratio <= max_speed:
++            continue
++        target_chars = int((slot / 1000.0 * target_speed - pred_a) / pred_b)
++        if actual:
++            # Cached audio can be ±1s off the linear model; scale by its real
++            # duration so the rewrite is short enough in practice.
++            target_chars = min(
++                target_chars,
++                int(chars * (slot / 1000.0 * target_speed) / (actual / 1000.0)))
++        if target_chars < 4 or target_chars >= chars:
++            logger.info(f"[fit] condense skip line {it.get('line')}: "
++                        f"ratio={ratio:.2f}, target_chars={target_chars}, chars={chars}")
++            continue
++        short = _fit_condense_text(text, target_chars, cache, cache_path, target_lang)
++        if not short or _fit_chars(short) >= chars:
++            continue
++        if _fit_chars(short) > target_chars + 6:
++            logger.info(f"[fit] condense reject line {it.get('line')}: "
++                        f"{_fit_chars(short)} chars > {target_chars + 6}")
++            continue
++        if not _fit_terms_kept(text, short, terms):
++            logger.info(f"[fit] condense reject line {it.get('line')}: term lost")
++            continue
++        old_chars = chars
++        it["text"] = short
++        it["base_key"] = _fit_base_key(it, target_lang)
++        it["_fit_cached_ms"] = 0
++        changed += 1
++        logger.info(f"[fit] condense line {it.get('line')}: {old_chars} -> "
++                    f"{_fit_chars(short)} chars (slot={slot / 1000.0:.2f}s, "
++                    f"was {ratio:.2f}x)")
++    return changed
++
++
++def _ref_tag(ref_path: str, cache: dict) -> str:
++    """Content hash of the reference clip: stable across runs and speakers."""
++    if not ref_path:
++        return ""
++    if ref_path in cache:
++        return cache[ref_path]
++    try:
++        tag = hashlib.md5(Path(ref_path).read_bytes()).hexdigest()
++    except Exception:
++        tag = ""
++    cache[ref_path] = tag
++    return tag
+ 
+ 
+ class DubbingMixin:
+@@ -40,7 +550,10 @@
+             self.signal(text='Skip tts')
+             return
+         queue_tts = []
+-        subs = get_subtitle_from_srt(self.cfg.target_sub)
++        # DeepSeek-audited TTS units can merge several display cues; keep the
++        # display SRT untouched so subtitles remain short and readable.
++        tts_srt = os.environ.get("VTV_TTS_SRT", "")
++        subs = get_subtitle_from_srt(tts_srt or self.cfg.target_sub)
+         source_subs = get_subtitle_from_srt(self.cfg.source_sub)
+         if len(subs) < 1:
+             raise DubbingSrtError(f"SRT file error:{self.cfg.target_sub}")
+@@ -60,8 +573,12 @@
+                 continue
+             voice = line_roles.get(f'{it["line"]}', voice_role) if line_roles else voice_role
+ 
+-            _key = get_md5(f"{self.cfg.target_language_code}-{it['text']}-{voice}-{rate}-{self.cfg.volume}-{self.cfg.pitch}-{self.cfg.tts_type}-{settings.get('remove_dubb_silence', True)}-{settings.get('remove_dubb_all_silence', True)}-{settings.get('remove_dubb_silence_level', 'default')}")
++            _base_key = get_md5(f"{self.cfg.target_language_code}-{it['text']}-{voice}-{rate}-{self.cfg.volume}-{self.cfg.pitch}-{self.cfg.tts_type}-{settings.get('remove_dubb_silence', True)}-{settings.get('remove_dubb_all_silence', True)}-{settings.get('remove_dubb_silence_level', 'default')}")
+ 
++            # Prefer pairing by time overlap.  _split_long_subs can make the
++            # target list longer than the source list, so index-based pairing
++            # silently assigns the wrong ref_text to every later block.
++            source_item = _source_by_overlap(source_subs, it['start_time'], it['end_time'])
+             tmp_dict = {
+                 "text": it['text'],
+                 "line": it['line'],
+@@ -69,22 +586,18 @@
+                 "end_time": it['end_time'],
+                 "startraw": it['startraw'],
+                 "endraw": it['endraw'],
+-                "ref_text": source_subs[i]['text'] if source_subs and i < len(source_subs) else '',
+-                "start_time_source": source_subs[i]['start_time'] if source_subs and i < len(source_subs) else it[
+-                    'start_time'],
+-                "end_time_source": source_subs[i]['end_time'] if source_subs and i < len(source_subs) else it[
+-                    'end_time'],
++                "ref_text": source_item['text'] if source_item else '',
++                "start_time_source": source_item['start_time'] if source_item else it['start_time'],
++                "end_time_source": source_item['end_time'] if source_item else it['end_time'],
+                 "role": voice,
+                 "rate": rate,
+                 "volume": self.cfg.volume,
+                 "pitch": self.cfg.pitch,
+                 "tts_type": self.cfg.tts_type,
+-                "filename": f"{self.cfg.cache_folder}/{i}-{_key}.wav"
++                "filename": "",
++                "base_key": _base_key,
++                "_idx": i,
+             }
+-            _dubbing_cache=f'{DUBBING_CACHE}/{_key}.wav'
+-            if vail_file(_dubbing_cache):
+-                # 直接使用缓存
+-                shutil.copy2(_dubbing_cache,tmp_dict['filename'])
+             if str(voice).strip().lower() == 'clone' and self.cfg.tts_type in SUPPORT_CLONE:
+                 tmp_dict['ref_wav'] = f"{self.cfg.cache_folder}/clone-{i}.wav"
+                 tmp_dict['ref_language'] = _lang
+@@ -95,8 +608,138 @@
+         if not self.queue_tts or len(self.queue_tts) < 1:
+             raise RuntimeError(f'字幕长度为0，无法继续配音')
+ 
++        refs = []
+         if len([it.get("ref_wav") for it in self.queue_tts if it.get("ref_wav")]) > 0:
+             self._create_ref_from_vocal()
++            refs = [it.get("ref_wav") for it in self.queue_tts
++                    if it.get("ref_wav") and Path(it["ref_wav"]).is_file()]
++            mode = _clone_ref_mode()
++            if refs:
++                if mode == "cluster":
++                    result = _cluster_refs(self.queue_tts, self.cfg.cache_folder)
++                    n = int(result.get("n_clusters", 1)) if result else 1
++                    if result and n > 1:
++                        changed = _apply_cluster_refs(self.queue_tts, result)
++                        logger.info(f"speaker cluster refs applied: "
++                                    f"{result.get('cluster_sizes')} changed={changed}")
++                    else:
++                        _use_single_ref(self.queue_tts, refs[0], self.cfg.cache_folder)
++                elif mode == "line":
++                    logger.info("clone ref mode=line: keeping per-line references")
++                    # Keep per-line refs (they carry per-line emotion), but
++                    # cluster only to obtain same-speaker keys for fragment
++                    # merging.  Without this every ref path is unique and
++                    # fit_merge cannot merge anything.
++                    merge_result = _cluster_refs(self.queue_tts, self.cfg.cache_folder)
++                    if merge_result:
++                        assign = merge_result.get("assign") or {}
++                        for it in self.queue_tts:
++                            cid = assign.get(str(it.get("line")))
++                            if cid is not None:
++                                it["_fit_speaker"] = cid
++                        logger.info(f"speaker cluster for merge: "
++                                    f"{merge_result.get('cluster_sizes')}")
++                else:
++                    # single: one clip for the whole video, best cache hit rate
++                    _use_single_ref(self.queue_tts, refs[0], self.cfg.cache_folder)
++
++        # Fit dubbing units to the actual speech rate: merge short fragments
++        # (same speaker, contiguous) and condense the few units that are still
++        # too long for their slot.  Disabled for dual subtitles, where the
++        # source/target line counts must stay paired.
++        target_lang = str(self.cfg.target_language_code or "")
++        if (target_lang.startswith("zh") and self.cfg.subtitle_type not in (3, 4)
++                and (self.cfg.tts_type == INDEX_TTS
++                     or _fit_flag("VTV_FIT_FORCE", False))
++                and _fit_flag("VTV_FIT_MERGE", True)):
++            total_ms = 0
++            try:
++                from videotrans.util import tools
++                total_ms = int(tools.get_video_duration(self.cfg.name) or 0)
++            except Exception:
++                pass
++            ref_cache_fit = {}
++            for it in self.queue_tts:
++                it["_fit_cached_ms"] = _fit_cached_ms(it, ref_cache_fit)
++            before = len(self.queue_tts)
++            self.queue_tts, merged = _fit_merge_queue(
++                self.queue_tts,
++                target_lang=target_lang,
++                max_speed=_fit_float("VTV_FIT_MAX_SPEED", 1.12),
++                max_chars=_fit_int("VTV_FIT_MAX_CHARS", 44),
++                gap_ms=_fit_int("VTV_FIT_GAP_MS", 500),
++                pred_a=_fit_float("VTV_FIT_PRED_A", 1.30),
++                pred_b=_fit_float("VTV_FIT_PRED_B", 0.123),
++                line_roles=app_cfg.line_roles,
++                total_ms=total_ms,
++                wrap_width=_fit_int("VTV_FIT_WRAP_WIDTH", 22),
++            )
++            logger.info(f"[fit] merge {before} -> {len(self.queue_tts)} lines "
++                        f"({merged} merges)")
++            if _fit_flag("VTV_FIT_CONDENSE", True):
++                condensed = _fit_condense_queue(
++                    self.queue_tts,
++                    target_lang=target_lang,
++                    cache_folder=self.cfg.cache_folder,
++                    total_ms=total_ms,
++                    max_speed=_fit_float("VTV_FIT_CONDENSE_SPEED", 1.25),
++                    pred_a=_fit_float("VTV_FIT_PRED_A", 1.30),
++                    pred_b=_fit_float("VTV_FIT_PRED_B", 0.123),
++                    target_speed=_fit_float("VTV_FIT_MAX_SPEED", 1.12),
++                )
++                logger.info(f"[fit] condense {condensed} lines")
++
++        first_tag = ""
++        if refs:
++            try:
++                first_tag = hashlib.md5(Path(refs[0]).read_bytes()).hexdigest()
++            except Exception:
++                first_tag = ""
++
++        # Build the final cache key only after the effective reference is known:
++        # otherwise a cached wav from another speaker would be reused.
++        ref_cache = {}
++        for it in self.queue_tts:
++            ref = it.get("ref_wav") or ""
++            is_clone = str(it.get("role", "")).strip().lower() == "clone"
++            tag = _ref_tag(ref, ref_cache) if is_clone and ref else ""
++            key = get_md5(f"{it['base_key']}-ref-{tag}") if tag else it["base_key"]
++            it["dubbing_key"] = key
++            it["filename"] = f"{self.cfg.cache_folder}/{it['_idx']}-{key}.wav"
++            cached = f"{DUBBING_CACHE}/{key}.wav"
++            if vail_file(cached):
++                shutil.copy2(cached, it["filename"])
++            elif tag and tag == first_tag:
++                # Pre-ref-hash caches used the same first clip as the fixed
++                # reference, so the first speaker's old audio is still valid.
++                legacy = f"{DUBBING_CACHE}/{it['base_key']}.wav"
++                if vail_file(legacy):
++                    shutil.copy2(legacy, it["filename"])
++
++        # Prepare (video/audio extraction, ffmpeg) can leave the GPU in a
++        # transient slow state.  Restarting once here gives TTS a clean
++        # context; unlike a per-N restart it costs only one model load.
++        if os.environ.get("VTV_RESTART_BEFORE_TTS", "1") not in ("0", "false", "False", ""):
++            cli = os.environ.get("INDEXTTS2_CLI", "")
++            py = os.environ.get("VTV_ITT_PYTHON", "")
++            entry = Path(os.environ.get("INDEXTTS2_HOME", "")) / "scripts" / "indextts2.py"
++            if py and entry.is_file():
++                # Bypass indextts2.cmd: the .cmd runs powershell/where, and those
++                # grandchildren can flash a console window even when cmd.exe is
++                # started with CREATE_NO_WINDOW.
++                stop_cmd = [py, str(entry), "stop", "--json"]
++            elif cli:
++                stop_cmd = [cli, "stop", "--json"]
++            else:
++                stop_cmd = []
++            if stop_cmd:
++                try:
++                    subprocess.run(stop_cmd, timeout=120,
++                                   stdout=subprocess.DEVNULL,
++                                   stderr=subprocess.DEVNULL)
++                    time.sleep(1)
++                except Exception:  # noqa: BLE001
++                    pass
+ 
+         run_tts(
+             queue_tts=self.queue_tts,
+@@ -115,10 +758,11 @@
+                 it['text']=delete_punc(it['text'])
+             if Path(it['filename']).exists():
+                 # 保存缓存
+-                shutil.copy2(it['filename'],f'{DUBBING_CACHE}/'+Path(it['filename']).name.split('-')[-1])
++                shutil.copy2(it['filename'], f"{DUBBING_CACHE}/{it['dubbing_key']}.wav")
+                 if outname:
+                     text = re.sub(r'["\'*?\\/|:<>\r\n\t]+', '', it['text'], flags=re.I | re.S)
+                     name = f'{outname}/{it["line"]}-{text[:60]}.wav'
+                     shutil.copy2(it['filename'], name)
+         
+-        self._save_srt_target(self.queue_tts, self.cfg.target_sub)
+\ No newline at end of file
++        if not os.environ.get("VTV_TTS_SRT"):
++            self._save_srt_target(self.queue_tts, self.cfg.target_sub)
+\ No newline at end of file
