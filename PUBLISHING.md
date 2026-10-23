@@ -1,9 +1,9 @@
 # Publishing checklist
 
-This repository currently has local history that still contains the old
-`vendor/` and `tools/rubberband/` snapshots. The current tree no longer tracks
-them, but **a normal push would still upload the old commits**. Before the
-first push, rewrite history or create a clean repository.
+The repository history has been rewritten to remove the old `vendor/` and
+`tools/rubberband/` snapshots. The current tree and all commits no longer
+contain those paths. Re-run the checks below before the first push or after
+importing a vendor snapshot again.
 
 ## 1. Confirm what is tracked
 
@@ -21,7 +21,7 @@ appear as ignored (`!!`).
 git clone --mirror . ../video-translate-backup.git
 ```
 
-## 3. Remove vendor from all history
+## 3. Remove vendor from all history (only if still present)
 
 Install `git-filter-repo` once:
 
