@@ -6,7 +6,7 @@ This repository is a portable video translation/dubbing skill. Read
 ## Quick commands
 
 ```bash
-# First put pyVideoTrans/IndexTTS2 in vendor/, or add --reuse-pvt/--reuse-itt.
+# First use auto-downloads pyVideoTrans/IndexTTS2 and models.
 python scripts/pipeline.py setup        # first install
 python scripts/pipeline.py doctor       # self-check
 python scripts/pipeline.py serve        # IndexTTS2 API + Gradio shim
