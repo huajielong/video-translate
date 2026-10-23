@@ -10,6 +10,48 @@ description: Translates and dubs videos into another language while cloning the 
 配套 pyVideoTrans（识别/翻译/合成）与 IndexTTS2（零样本克隆）；两者需单独安装，
 不随仓库分发。
 
+## 首次使用必须提醒用户
+
+从 GitHub 下载后第一次执行时，先不要直接 `run`；先向用户确认下面两件事。
+
+**1. DeepSeek Key**
+
+Key 不在 `config.json`，而在：
+
+```text
+<pyvideotrans_home>/videotrans/params.json
+```
+
+默认 `vendor/pyvideotrans/videotrans/params.json`。让用户自己执行：
+
+```bash
+python scripts/pipeline.py setup --deepseek-key "sk-..."
+# 或设置 DEEPSEEK_API_KEY 后重新 setup
+```
+
+模板是根目录 `params.example.json`。**不要让用户把 Key 发到聊天里**，也不要把它写进
+`SKILL.md`、README、`config.json` 或提交到 Git。Key 缺失时 `run` / `prep` 会提前
+退出并打印配置路径，`doctor` 也会给出提醒。
+
+**2. 关键参数**
+
+| 参数 | 默认 | 何时提醒 |
+|---|---|---|
+| `source_lang` / `target_lang` | `en` / `zh-cn` | 换课程语言时确认 |
+| `backend` | `index` | 需要其他 TTS 后端时确认 |
+| `subtitle_mode` | `hard` | 问用户要硬字幕还是 `soft` |
+| `subtitle_max_chars` | `22` | 非中文目标改用 `other_len=60` |
+| `voice_autorate` / `video_autorate` | `false` / `true` | 默认声音优先，不要改成音频拉伸 |
+| `max_video_speedup_rate` | `1.25` | 想保留更多停顿就调小 |
+| `max_phrase_pause_ms` | `300` | 句间空白仍长/太紧时调整 |
+| `duration_tol_s` | `15` | QC 时长容差的绝对下限 |
+| `resegment_llm_check` | `true` | 无 DeepSeek/审校失败时说明会回退 |
+| `clone_ref_mode` | `line` | 多说话人/音色稳定需求时确认 |
+| `glossary` | `assets/glossary.txt` | 换课程/领域必须换术语表 |
+
+完整表见 `references/configuration.md`。首次使用还要确认 `src_dir` / `out_dir`（或
+`--src` / `--out`）和磁盘/GPU 条件；`doctor` 通过后再开始。
+
 ## 硬规则
 
 1. **先 `doctor` 再跑任务；首次先 `setup`。** 缺依赖时按提示补跑 `setup`，不要直接 `run`。
@@ -36,6 +78,8 @@ python scripts/pipeline.py report --out "D:/translated"   # 汇总 QC 到 <out>/
 
 `vendor/`、模型、checkpoints、`config.json` 和 API Key 都不随仓库分发；
 安装与许可证见根目录 `README.md`、`THIRD_PARTY_NOTICES.md`。
+DeepSeek Key 只写在本机 `<pyvideotrans_home>/videotrans/params.json`
+（模板 `params.example.json`），不在 `config.json`。
 
 产物：`<out>/<原名><final_suffix>.mp4`、`<out>/_字幕/<原名>.{源,目标}.srt`、`<out>/QC_SUMMARY.md`。
 中途失败直接重跑同一命令；已完成的阶段和逐句配音会命中缓存。

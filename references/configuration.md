@@ -100,6 +100,30 @@
 
 > `params.json` 只保存在本机，不要提交或随包分发。
 
+## DeepSeek Key
+
+Key 不在 `config.json`，而在 pyVideoTrans 的：
+
+```text
+<pyvideotrans_home>/videotrans/params.json
+```
+
+默认路径：`vendor/pyvideotrans/videotrans/params.json`。
+
+配置方式：
+
+```bash
+python scripts/pipeline.py setup --deepseek-key "sk-..."
+# 或
+export DEEPSEEK_API_KEY="sk-..."   # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
+python scripts/pipeline.py setup
+```
+
+手动配置时复制模板 `params.example.json`，把真实 Key 只写进
+`vendor/.../params.json`（该文件已 gitignore），不要写进 `params.example.json`。
+`doctor` 只检查 Key 是否存在；有效性用
+`python scripts/trans_cli.py test-channel --channel deepseek` 验证。
+
 ## 环境变量
 
 | 变量 | 作用 |

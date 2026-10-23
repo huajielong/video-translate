@@ -368,8 +368,6 @@ def cmd_setup(args, cfg: dict) -> int:
     cfg["deepseek_model"] = params.get("deepseek_model", cfg["deepseek_model"])
     save_config(cfg)
     print(f"[setup] wrote {CONFIG}")
-    if not params.get("deepseek_key"):
-        print("[setup] NOTE: no DeepSeek key. Set DEEPSEEK_API_KEY or pass --deepseek-key.")
     return cmd_doctor(args, cfg)
 
 
@@ -402,8 +400,10 @@ def cmd_doctor(_args, cfg: dict) -> int:
             key = json.loads(params.read_text(encoding="utf-8")).get("deepseek_key", "")
         except Exception:
             pass
-    add("DeepSeek key", bool(key or os.environ.get("DEEPSEEK_API_KEY")),
-        "env or params.json")
+    key_ok = bool(key or os.environ.get("DEEPSEEK_API_KEY"))
+    add("DeepSeek key", key_ok, "env or params.json")
+    if not key_ok:
+        print_deepseek_key_help(cfg)
     add("Index API :8791", healthy(cfg["index_api"] + "/health"), cfg["index_api"])
     add("Gradio shim :7861", healthy(cfg["index_url"] + "/"), cfg["index_url"])
     add("glossary", Path(cfg["glossary"]).exists(), cfg["glossary"])
@@ -421,6 +421,40 @@ def vendor_ready(cfg: dict) -> bool:
     pvt = Path(cfg["pyvideotrans_home"])
     itt = Path(cfg["index_tts2_home"])
     return (pvt / "cli.py").is_file() and (itt / "scripts" / "indextts2.py").is_file()
+
+
+def deepseek_key_path(cfg: dict) -> Path:
+    return Path(cfg["pyvideotrans_home"]) / "videotrans" / "params.json"
+
+
+def deepseek_key_present(cfg: dict) -> bool:
+    key = os.environ.get("DEEPSEEK_API_KEY", "")
+    path = deepseek_key_path(cfg)
+    if not key and path.is_file():
+        try:
+            key = json.loads(path.read_text(encoding="utf-8")).get("deepseek_key", "")
+        except Exception:
+            key = ""
+    return bool(str(key).strip())
+
+
+def print_deepseek_key_help(cfg: dict) -> None:
+    path = deepseek_key_path(cfg)
+    print("[deepseek] DeepSeek API Key is not configured.")
+    print(f"           key file: {path}")
+    print("           Recommended:")
+    print('             python scripts/pipeline.py setup --deepseek-key "sk-..."')
+    print("           Or set DEEPSEEK_API_KEY and rerun setup.")
+    print("           Do not paste the key into chat or commit params.json.")
+
+
+def require_deepseek_key(cfg: dict) -> bool:
+    if cfg.get("translate_channel", "deepseek") != "deepseek":
+        return True
+    if deepseek_key_present(cfg):
+        return True
+    print_deepseek_key_help(cfg)
+    return False
 
 
 def auto_setup(cfg: dict) -> bool:
@@ -1098,6 +1132,8 @@ def ensure_services(cfg: dict) -> None:
 def cmd_run(args, cfg: dict) -> int:
     if not _check_power(args):
         return 2
+    if not require_deepseek_key(cfg):
+        return 2
     items = videos(cfg, args.videos)
     ok = prep(cfg, items, args.force)
     ensure_services(cfg)
@@ -1189,6 +1225,8 @@ def main() -> int:
         if args.command == "status":
             return cmd_status(args, cfg)
         if args.command == "prep":
+            if not require_deepseek_key(cfg):
+                return 2
             return 0 if prep(cfg, videos(cfg, args.videos), args.force) else 1
         if args.command == "dub":
             if not _check_power(args):

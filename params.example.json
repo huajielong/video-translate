@@ -1,0 +1,10 @@
+{
+  "translate_type": 5,
+  "deepseek_key": "",
+  "deepseek_model": "deepseek-flash",
+  "tts_type": 12,
+  "index_url": "http://127.0.0.1:7861",
+  "indextts_version": 0,
+  "model_name": "large-v3-turbo",
+  "stt_model_name": "large-v3-turbo"
+}

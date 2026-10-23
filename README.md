@@ -13,6 +13,10 @@
 - 逐句配音缓存、断点续跑、QC 汇总。
 - Windows 下可用 `pythonw` 无窗口运行，避免 cmd / conhost 闪窗。
 
+> **首次使用**：先配置 DeepSeek Key（写入 `params.json`，模板见
+> `params.example.json`），确认 `source_lang` / `target_lang`、`subtitle_mode`、
+> `glossary` 等关键参数，再运行 `doctor`。Key 缺失时 `run`/`prep` 会提前退出并提示。
+
 ## 环境要求
 
 | 项 | 推荐 |
@@ -143,9 +147,50 @@ Windows 后台 / Agent 场景：
 pythonw scripts/pipeline.pyw run --src "D:/videos" --out "D:/translated"
 ```
 
+## DeepSeek API Key
+
+Key **不存在** `config.json`，而是写到 pyVideoTrans 的
+`params.json`：
+
+```text
+<pyvideotrans_home>/videotrans/params.json
+```
+
+默认安装即：
+
+```text
+vendor/pyvideotrans/videotrans/params.json
+```
+
+三种配置方式：
+
+```bash
+# 1) setup 参数（推荐）
+python scripts/pipeline.py setup --deepseek-key "sk-..."
+
+# 2) 环境变量
+export DEEPSEEK_API_KEY="sk-..."       # Windows PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
+python scripts/pipeline.py setup
+
+# 3) 手动编辑 params.json
+cp params.example.json vendor/pyvideotrans/videotrans/params.json
+# 然后把 deepseek_key 改成真实 Key
+```
+
+`params.example.json` 是模板，`deepseek_key` 留空；不要把真实 Key 写进
+`params.example.json` 或提交到 Git。`params.json` 已在 `.gitignore` 中。
+
+`doctor` 只检查 Key 是否存在，不验证有效性；验证渠道用：
+
+```bash
+python scripts/trans_cli.py test-channel --channel deepseek
+```
+
+或直接跑一条短视频翻译。
+
 ## 配置
 
-复制模板后按机器修改：
+`config.json` 只放非敏感运行参数，不保存 API Key。复制模板后按机器修改：
 
 ```bash
 cp config.example.json config.json
