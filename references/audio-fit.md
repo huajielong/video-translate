@@ -43,7 +43,8 @@ IndexTTS2 **每句有固定开销**（中文实测约 `1.3s + 0.123s/汉字`）�
 - 有 TTS 语义单元时 `fit_merge`/`fit_condense` 不执行，避免二次改写音频；
 - 视频变速后 `_rate.py` 会把 queue 时间更新到最终视频时间轴，显示字幕从该时间轴
   重新生成，保证字幕、语音、画面三者同步；
-- `duration_tol_s`（默认 15s）允许视频变速带来的成品时长漂移。
+- QC 按 `max_video_speedup_rate` / `max_video_pts_rate` 计算成品时长上下界，
+  `duration_tol_s`（默认 15s）只是绝对下限。
 
 实测 001（trial23）：音频加速 `False`、视频慢速 `True`，TTS 边缘裁剪 + 20ms fade +
 80ms 预滚 + 视频快/慢微调后，成品 204.2s（源 214.5s，−10.3s），显示字幕 80 条、
@@ -174,7 +175,7 @@ audio_seconds ≈ fit_pred_a + fit_pred_b × 汉字数
 | `clone_ref_mode=cluster` 多说话人 | 生效，只合并同一参考的行 |
 | `clone_ref_mode=line` | 生效：逐句参考保留情感，另用 CAMPPlus 聚类做同说话人合并键 |
 | 非中文 / 非 IndexTTS2 | 默认不启用；重新标定预测模型后设 `fit_force=true` |
-| 字幕条数 | fit 兜底时会减少（002 232→199）；默认 TTS 单元路径每条一行，fallback 超长块可能两行 |
+| 字幕条数 | fit 兜底时会减少（002 232→199）；单语字幕始终按一行 22 字切条 |
 
 不解决的问题：源片本身的停顿（长静音）、视频时间轴变化、背景音乐；
 需要背景音时按 `quality.md` 做人声分离/重新嵌入。
@@ -184,7 +185,7 @@ audio_seconds ≈ fit_pred_a + fit_pred_b × 汉字数
 1. 日志里每句有 `仅音频调整: dubb_duration=...ms, audio_target=...ms`；
    用最终 SRT 的槽位算 `dubb_duration / slot`，目标 **P90 ≤1.1、max ≤1.3**。
 2. `tts_probe.jsonl` 用来看 GPT/s2mel 耗时，不要拿它当对齐比例。
-3. 跑 `qc.py`：字幕块数、每条一行、术语命中、时长（`duration_tol_s`）。
+3. 跑 `qc.py`：字幕块数、每条一行、术语命中、时长上下界。
 
 fit 兜底历史实测（002，199 句）：中位 0.77×、P90 1.05×、最大 1.44×；
 >1.5× 0 句、>1.3× 2 句；QC PASS，时长差 0.064s。

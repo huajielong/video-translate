@@ -9,9 +9,8 @@
 - `prep` 的 DeepSeek 审校把完整句合并成 **TTS 语义单元**（可跨多条显示字幕）；
   显示字幕在最终音画时间轴上按 TTS 单元重新分配，因此字幕与语音/画面同步。
   两者块数不同是正常的。
-- 没有 TTS 语义单元、退回 fit 兜底时，显示 SRT 仍按 queue 文本换行，超过 22 字的
-  合并块可能显示成两行；要强制一行，保持 `resegment_llm_check=true`，或把
-  `fit_max_chars` / `resegment_target_max_chars` 调到 ≤22。
+- 单语字幕（`hard`/`soft`）无论是否命中 TTS 语义单元，`_stage_align` 都会从最终
+  时间轴按一行宽度重新切条；双语字幕保持源/目标 1:1 配对，不做二次切分。
 - 非中文目标：一行宽度由 pyVideoTrans 的 `other_len`（默认 60）决定；
   `subtitle_max_chars` 目前只作用于 CJK，不要直接套用中文的 22 字。
 - 硬字幕（默认）需要一次 NVENC 重编码；软字幕用 `--subtitle soft`，视频流可复制。
@@ -55,7 +54,7 @@
 
 | 指标 | 阈值 |
 |---|---|
-| 时长差 | ≤`duration_tol_s`（默认 15 s；`video_autorate` 会改变成品总时长） |
+| 时长 | 在 `[源/1.25−2s, 源×1.5+2s]` 内（由 `max_video_speedup_rate` / `max_video_pts_rate` 决定），且不突破 `duration_tol_s` 的绝对下限（默认 15s） |
 | 视频 | h264 / 1280x720 / yuv420p（可按源调整） |
 | 音频 | AAC / 48 kHz / stereo |
 | 响度 | -18 ±1 LUFS，true peak ≤ -1 dBFS |

@@ -21,6 +21,31 @@ from _winhide import hide_console_windows  # noqa: E402
 hide_console_windows()
 
 DURATION_TOL_S = float(os.environ.get("VTV_DURATION_TOL_S", "1.0"))
+
+
+def duration_bounds(src_dur: float) -> tuple[float, float]:
+    """Allowed output length for the configured video_autorate limits.
+
+    Shortening is bounded by max_video_speedup_rate (1.25x -> >=80% of source);
+    lengthening by max_video_pts_rate (1.5x -> <=150%).  duration_tol_s stays
+    as an absolute floor for short clips; the two directions are asymmetric so
+    a lax slowdown bound does not mask an over-shortened output.
+    """
+    try:
+        speedup = float(os.environ.get("VTV_MAX_VIDEO_SPEEDUP_RATE", "1.0") or 1.0)
+    except ValueError:
+        speedup = 1.0
+    try:
+        slow = float(os.environ.get("VTV_MAX_VIDEO_PTS_RATE", "1.0") or 1.0)
+    except ValueError:
+        slow = 1.0
+    if src_dur <= 0:
+        return 0.0, 0.0
+    lower = min(src_dur - DURATION_TOL_S, src_dur / max(1.0, speedup) - 2.0)
+    upper = max(src_dur + DURATION_TOL_S, src_dur * max(1.0, slow) + 2.0)
+    return max(0.0, lower), upper
+
+
 LOUDNESS_TARGET = -18.0
 LOUDNESS_TOL = 1.0
 TRUE_PEAK_MAX = -1.0
@@ -226,10 +251,13 @@ def check_video(video: str, source: str, zh_srt: str, en_srt: str | None,
 
     out_dur = float(vinfo.get("format", {}).get("duration") or 0)
     src_dur = float(sinfo.get("format", {}).get("duration") or 0) if sinfo else 0
+    lower, upper = duration_bounds(src_dur)
     result["duration"] = {"output": round(out_dur, 3), "source": round(src_dur, 3),
-                          "diff": round(abs(out_dur - src_dur), 3) if src_dur else None}
-    if src_dur and abs(out_dur - src_dur) > DURATION_TOL_S:
-        result["errors"].append(f"duration diff {abs(out_dur-src_dur):.2f}s > {DURATION_TOL_S}s")
+                          "diff": round(abs(out_dur - src_dur), 3) if src_dur else None,
+                          "min": round(lower, 3), "max": round(upper, 3)}
+    if src_dur and not (lower <= out_dur <= upper):
+        result["errors"].append(
+            f"duration {out_dur:.2f}s outside [{lower:.2f}, {upper:.2f}]")
 
     if a_streams:
         i, peak = measure_loudness(video)

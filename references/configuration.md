@@ -56,7 +56,7 @@
 | `resegment_source_max_chars` | `140` | 源语言合并/切分上限（英文按字符） |
 | `resegment_target_max_chars` | `44` | 规则断句时的目标块上限；最终显示按 `subtitle_max_chars` 一行切条 |
 | `resegment_llm_check` | `true` | 规则断句后由 DeepSeek 审校，生成 TTS 语义单元；显示字幕不被拉长 |
-| `duration_tol_s` | `15` | `video_autorate` 下允许的成品/源片时长差（秒） |
+| `duration_tol_s` | `15` | 绝对时长容差下限；`video_autorate` 下 QC 还会按 `max_video_speedup_rate` / `max_video_pts_rate` 放宽上下界 |
 | `dubb_min_pause_ms` | `200` | 关闭 `video_autorate`、退回音频填缝时每句至少保留的停顿毫秒数 |
 | `dubb_natural_pause_ms` | `600` | 关闭 `video_autorate` 时的自然短停顿；空档不超过它保持原速，超过才放慢填缝 |
 | `fit_merge` | `true` | 合并同说话人、时间相邻的短句，减少 IndexTTS2 固定开销导致的 2–3× 加速 |

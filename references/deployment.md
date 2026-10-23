@@ -97,9 +97,9 @@ python scripts/pipeline.py setup \
   - `_rate.py` concat 强制 48k/2ch；空档 ≤natural 时保持 TTS 原速（不再把
     `audio_target` 默认设成整个槽位）；audio_native 下音频加速/放慢上限 1.0；
     首条字幕槽位从原始起点算，不把片头算进首句
-  - `_stage_align.py` 使用 `VTV_TTS_SRT` 时不要用 TTS 单元覆盖显示字幕；对齐前把
-    TTS 精确裁到首/末非静音，20ms fade，前后各加 80ms 纯静音，并从最终时间轴
-    生成一行显示字幕
+  - `_stage_align.py` 单语字幕始终从最终时间轴按一行宽度重切（不限于
+    `VTV_TTS_SRT`）；双语字幕保持 1:1 配对。对齐前把 TTS 精确裁到首/末非静音，
+    20ms fade，前后各加 80ms 纯静音
   - `_rate.py` 音频短于槽位时把视频最多加快 `max_video_speedup_rate`（默认 1.25）
     到“音频 + 300ms”，避免源空白留下 1–2s 死气；视频变速后更新队列时间轴
   - `_stage_subtitle.py` `cjk_len` 默认 22（与 `fit_wrap_width`、QC 一致）
@@ -115,8 +115,9 @@ python scripts/pipeline.py setup \
   - `scripts/resegment_srt.py` 规则重断句；`scripts/resegment_check.py` DeepSeek
     审校（只允许合并/轻微压缩，失败回退规则）；`pipeline.py` 在 `prep` 前后调用，
     并生成 `<target>.tts.srt`
-  - `pipeline.py` 的 `post` 在 `video_autorate` 下按成品自身时长输出，
-    QC 用 `duration_tol_s`（默认 15s）允许变速带来的时长漂移
+  - `pipeline.py` 的 `post` 在 `video_autorate` 下按成品自身时长输出；
+    QC 按 `max_video_speedup_rate` / `max_video_pts_rate` 计算不对称上下界，
+    `duration_tol_s`（默认 15s）是绝对下限
   - `scripts/trans_cli.py` 任务优先直接用 pyVideoTrans venv 的 `pythonw.exe`（fallback
     `uv run --no-sync`），并注入 `_winhide_site` 的 `PYTHONPATH`
   - `scripts/pipeline.py` / `trans_cli.py` 入口 `pythonw`、base pythonw 选择、

@@ -47,7 +47,8 @@ Windows 后台/Agent 运行用 `pythonw scripts/pipeline.pyw <command>`：解释
    避免句间“嗖”声。
 5. 显示字幕默认硬字幕、**每条一行**（CJK 上限 `subtitle_max_chars=22`）；软字幕用
    `--subtitle soft`，硬/软二选一。非中文目标用 `other_len=60`，不要套用 22 字。
-6. `post` 统一 loudnorm；QC 用 `duration_tol_s`（默认 15s）容忍视频变速造成的总时长漂移。
+6. `post` 统一 loudnorm；QC 按 `max_video_speedup_rate` / `max_video_pts_rate` 计算
+   时长上下界，`duration_tol_s`（默认 15s）只是绝对下限，容忍视频变速造成的漂移。
 7. 交付前看 `<out>/QC_SUMMARY.md`：QC PASS、每条一行、字幕与音画同步、句间空白约 300ms。
    句间仍有长空白/爆音时按 `references/troubleshooting.md` 的“句间”两节排查。
 
@@ -98,7 +99,7 @@ AAC 48 kHz、-18 LUFS、术语表 `assets/glossary.txt`。软字幕用 `--subtit
 默认 **audio_native（声音优先）**：翻译前后 `resegment` 重断句，DeepSeek 审校后把
 完整句作为 TTS 语义单元（显示字幕仍是短块）；`voice_autorate=false` 保持 TTS 原速，
 `video_autorate=true` 用视频片段 PTS 吸收长度差：音频短时最多加快 1.25× 并保留
-`max_phrase_pause_ms=300`，QC 用 `duration_tol_s=15`。`fit_merge`/`fit_condense`
+`max_phrase_pause_ms=300`，QC 时长上下界由视频变速上限决定、`duration_tol_s=15` 是绝对下限。`fit_merge`/`fit_condense`
 只在没有 TTS 语义单元时兜底。细节见 `references/audio-fit.md`，配置见 `configuration.md`。
 Windows 上 API/shim/daemon 统一用 base `pythonw`，venv 的 `site-packages` 走
 `PYTHONPATH`；聚类失败会让 `fit_merge` 0 合并、块数暴增。
