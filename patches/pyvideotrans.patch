@@ -319,26 +319,27 @@
  class AlignMixin:
  
      def align(self) -> None:
-@@ -28,7 +119,17 @@
+@@ -28,7 +119,18 @@
              self.video_time = get_video_duration(self.cfg.novoice_mp4)
          from videotrans.task._rate import SpeedRate
  
 -        
-+        # Trim TTS edge silence: a raw 1-2s lead/tail becomes an audible gap
-+        # between phrases when audio is kept at native speed.
-+        if os.environ.get("VTV_TTS_SRT"):
-+            for it in self.queue_tts:
-+                fn = it.get("filename")
-+                if fn and Path(fn).is_file():
-+                    trimmed, dur = _trim_tts_silence(fn)
-+                    it["filename"] = trimmed
-+                    if dur:
-+                        it["dubb_time"] = dur
++        # Trim TTS edge silence for every dubbing path: a raw 1-2s lead/tail
++        # becomes an audible gap between phrases when audio is kept at native
++        # speed.  Gating this on VTV_TTS_SRT left fallback/rule-based videos
++        # with hundreds of seconds of accumulated edge silence.
++        for it in self.queue_tts:
++            fn = it.get("filename")
++            if fn and Path(fn).is_file():
++                trimmed, dur = _trim_tts_silence(fn)
++                it["filename"] = trimmed
++                if dur:
++                    it["dubb_time"] = dur
 +
          rate_inst = SpeedRate(
              queue_tts=self.queue_tts,
              uuid=self.uuid,
-@@ -52,10 +153,20 @@
+@@ -52,10 +154,20 @@
              it['text']=it['text'].strip('...')
              if self.cfg.fix_punc==2:
                  it['text']=delete_punc(it['text'])
