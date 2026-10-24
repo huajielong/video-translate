@@ -53,6 +53,25 @@ def parse_srt(path: Path) -> list[dict]:
     return blocks
 
 
+def sanitize_blocks(blocks: list[dict]) -> list[dict]:
+    """Sort cues and remove out-of-order/over-long overlaps.
+
+    VTT exports can contain overlapping speaker cues and occasional cues whose
+    end is minutes after the next cue starts.  The aligner later assumes
+    monotonic, non-overlapping slots; clamp each cue's end to the next cue's
+    start so one bad cue cannot create a multi-minute slot.
+    """
+    blocks.sort(key=lambda b: (b["start"], b["end"]))
+    for i, b in enumerate(blocks):
+        b["start"] = max(0, int(b["start"]))
+        b["end"] = max(b["start"] + 1, int(b["end"]))
+        if i + 1 < len(blocks):
+            next_start = max(0, int(blocks[i + 1]["start"]))
+            if b["end"] > next_start:
+                b["end"] = max(b["start"] + 1, next_start)
+    return blocks
+
+
 def fmt_time(ms: int) -> str:
     ms = max(0, int(ms))
     h, rem = divmod(ms, 3600000)
@@ -159,6 +178,7 @@ def main() -> int:
     if not blocks:
         print(f"no subtitle blocks in {src}")
         return 2
+    blocks = sanitize_blocks(blocks)
     merged = resegment(blocks, max(8, args.max_chars), max(0, args.max_gap),
                        args.source_lang)
     write_srt(merged, Path(args.output))
