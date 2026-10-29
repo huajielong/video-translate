@@ -60,7 +60,7 @@ python scripts/pipeline.py setup --deepseek-key "sk-..."
    `setup --reuse-pvt ... --reuse-itt ...`，或用 `VTV_AUTO_INSTALL=0` 关闭自动下载。
 2. **不要把输入视频放进输出目录。** 上游 `clear_cache` 默认递归删除输出目录；`pipeline.py` 已规避，手工调用 `trans_cli.py` 时必须加 `--no-clear-cache`。
 3. **SRT 不要放在成品 MP4 旁边。** 播放器会自动加载同名 SRT，叠加硬字幕形成“两层字幕”；本流水线统一放到 `<out>/_字幕/`。
-4. **IndexTTS2 是单 worker。** 不要并发请求同一守护进程；`serve` 启动的桥接会按 `index_restart_every` 自动重启守护进程，不要再手动重启。
+4. **IndexTTS2 是单 worker。** 不要并发请求同一守护进程；`serve` 启动的桥接会按 `index_restart_every` 自动重启守护进程，不要再手动重启。批量课程译制时，`prep`（分句/翻译/审校）可多课并行，`run`（dub+post）必须**按课程串行**；每门课结束后先归档 QC，再进入下一门。
 5. **优先改配置，不改 vendor。** 换后端/语言/字幕模式用 CLI 参数或 `config.json`；升级上游后本项目补丁需重新应用，见 `references/deployment.md`。
 6. **Windows 后台用 `pythonw scripts/pipeline.pyw`，不要调用 `.cmd` 或 venv 的 `pythonw.exe` launcher。**
    两者都会再拉起 `python.exe` / `conhost`，闪黑窗；进程模型与修复见 `references/deployment.md`。
@@ -74,6 +74,7 @@ python scripts/pipeline.py serve      # IndexTTS2 API :8791 + Gradio 桥接 :786
 python scripts/pipeline.py run --src "D:/videos" --out "D:/translated" \
   --source en --target zh-cn --backend index
 python scripts/pipeline.py report --out "D:/translated"   # 汇总 QC 到 <out>/QC_SUMMARY.md
+python scripts/batch_courses.py run --manifest courses.json   # 多课程：prep 并行、dub 串行
 ```
 
 `vendor/`、模型、checkpoints、`config.json` 和 API Key 都不随仓库分发；

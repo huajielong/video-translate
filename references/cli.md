@@ -25,6 +25,23 @@ Windows 上从 Agent、编辑器或计划任务（父进程没有控制台）运
 | `tts_stability` | 逐句 TTS 稳定性基准（`scripts/tts_stability.py`） | `--stem` `--src` `--out` | 直连 `/v1/tts`，采样 CPU/GPU/probe，输出到 `.runtime/stability/` |
 | `fit_calibrate` | 标定配音时长模型（`scripts/fit_calibrate.py`） | `--probe` `--pid` `--last` | 从 `tts_probe.jsonl` 拟合 `fit_pred_a/b`；换后端/音色后重跑 |
 
+## 批量课程（`scripts/batch_courses.py`）
+
+清单驱动的多课程批处理，prep 可并行、dub+post 必须串行：
+
+```bash
+python scripts/batch_courses.py prep   --manifest courses.json --workers 4
+python scripts/batch_courses.py run    --manifest courses.json [--only 1,3] [--keep-serve]
+python scripts/batch_courses.py status --manifest courses.json
+```
+
+manifest 每门课给 `name`、`root`、`modules`（可选 `out`）；顶层可给
+`source` / `target` / `backend` / `state_dir` / `qc_dir`。`run` 会先 `serve`，
+逐课串行 `run`，每课结束把 QC 归档到 `<qc_dir>/<编号>_<课程名>/`（默认
+`<state_dir>/qc`），并写 `batch_status.json`、`batch_summary.md`。中断后重跑
+同一 `run` 命令即可：已完成且 QC 通过的视频会跳过。重复 stem（如多门课都有
+`001_Introduction`）靠课程归档区分，历史批次续跑时把 `qc_dir` 指到原归档目录。
+
 ## 共享参数
 
 以下参数由 `prep/dub/post/run/status/qc/polish/report` 共同接受，但只有相关命令会使用：

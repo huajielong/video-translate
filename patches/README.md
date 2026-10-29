@@ -23,6 +23,12 @@ audio-native/fit implementation is substantially larger than upstream v4.16.
 Bootstrap normalizes patched text files to LF before applying; do the same if
 you apply the patch manually.
 
+`_rate.py` also pins the placeholder silence (`silent_place_{i}.wav`) to the
+project sample rate and channel count. Upstream used pydub's default
+11025 Hz mono; when such a placeholder was the first concat input, ffmpeg
+interpreted every later 48 kHz stereo clip with its time base and multiplied
+the whole track by 8.707 (source 315 s → output 2356 s).
+
 ## IndexTTS2 + wrapper
 
 - Upstream model/code: `https://github.com/index-tts/index-tts.git`

@@ -1,3 +1,5 @@
+diff --git a/videotrans/task/_rate.py b/videotrans/task/_rate.py
+index afee7d4..36072e0 100644
 --- a/videotrans/task/_rate.py
 +++ b/videotrans/task/_rate.py
 @@ -1,4 +1,5 @@
@@ -6,7 +8,7 @@
  """
  # 2026-0923 修改
  
-@@ -174,9 +175,6 @@
+@@ -174,9 +175,6 @@ def _change_speed_rubberband(input_path, target_duration,idx=0)->bool:
  
          if target_duration <= 0: target_duration = 1
  
@@ -16,7 +18,7 @@
          time_stretch_rate = current_duration / target_duration
  
          # 限制范围
-@@ -320,8 +318,29 @@
+@@ -320,8 +318,29 @@ class SpeedRate:
          # 输出变速后的音频
          self.target_audio = target_audio
          # 超过 50 和 10 会发生致命错误
@@ -48,7 +50,7 @@
          # 存放待 音频加速 数据
          self.audio_data = []
          # 存放待视频慢速 数据
-@@ -416,7 +435,11 @@
+@@ -416,7 +435,11 @@ class SpeedRate:
              if i < len(self.queue_tts) - 1:
                  next_sub = self.queue_tts[i + 1]
                  current['end_time'] = next_sub['start_time']
@@ -61,7 +63,18 @@
              current['end_time_source'] = current['end_time']
              current['dubb_time'] = 0
  
-@@ -454,15 +477,30 @@
+@@ -428,7 +451,9 @@ class SpeedRate:
+             # 设置配音文件时长
+             if not current.get('filename') or not Path(current['filename']).exists():
+                 dummy_wav = Path(self.cache_folder, f'silent_place_{i}.wav').as_posix()
+-                AudioSegment.silent(duration=source_duration).export(dummy_wav, format="wav")
++                AudioSegment.silent(duration=source_duration,
++                                    frame_rate=self.AUDIO_SAMPLE_RATE) \
++                    .set_channels(self.AUDIO_CHANNELS).export(dummy_wav, format="wav")
+                 current['filename'] = dummy_wav
+                 current['dubb_time'] = source_duration
+                 logger.debug(f"[Prepare] 字幕[{current['line']}] 无配音，生成 {source_duration}ms 静音占位")
+@@ -454,15 +479,30 @@ class SpeedRate:
  
              # 仅音频加速
              if self.should_audiorate and not self.should_videorate:
@@ -94,7 +107,7 @@
                  # 存在视频慢速时，无论是否选择音频加速，都会强制应用，区别仅在于视频慢速幅度不同
                  self.audio_data.append({
                      "filename": it['filename'],
-@@ -470,14 +508,30 @@
+@@ -470,14 +510,30 @@ class SpeedRate:
                      "target_time": audio_target  # 变速结束后需达到的目标时长
                  })
                  logger.debug(
@@ -127,7 +140,7 @@
              else:
                  slow_video_no=""
                  # 仅视频慢速
-@@ -492,6 +546,15 @@
+@@ -492,6 +548,15 @@ class SpeedRate:
                          # 音频加速和视频慢速各自负担一半时间差
                          diff = dubb_duration - source_duration
                          video_target = round(source_duration + (diff / 2))
@@ -143,7 +156,7 @@
                      else:
                          slow_video_no=f" [仅音频加速可低于 {self.BOTH_MODE_AUDIO_ONLY_THRESHOLD}, 跳过视频慢速处理]"
  
-@@ -513,7 +576,7 @@
+@@ -513,7 +578,7 @@ class SpeedRate:
          logger.debug(f"[音频加速] 使用{_wok}个进程，处理 {len(self.audio_data)} 个配音片段")
          with ProcessPoolExecutor(max_workers=int(_wok)) as pool:
              for i, d in enumerate(self.audio_data):
@@ -152,7 +165,7 @@
                      all_task.append(pool.submit(
                          _change_speed_rubberband if HAS_RUBBERBAND and self.audio_speed_rubberband else _precise_speed_up_audio,
                          d['filename'], d['target_time'],i))
-@@ -555,8 +618,18 @@
+@@ -555,8 +620,18 @@ class SpeedRate:
  
          processed_clips.sort(key=lambda x: x.get('tts_index', 0))
          _total_ms = sum([it.get('actual_duration', 0) for it in processed_clips])
@@ -172,7 +185,7 @@
              return processed_clips, _total_ms
  
          if len(processed_clips) != len(self.queue_tts):
-@@ -576,10 +649,19 @@
+@@ -576,10 +651,19 @@ class SpeedRate:
              st=ed
  
          for i, it in enumerate(self.queue_tts):
@@ -194,7 +207,7 @@
              }
              self.audio_data.append(tmp)
  
-@@ -795,7 +877,12 @@
+@@ -795,7 +879,12 @@ class SpeedRate:
          self.concat_video_is_end=False
          threading.Thread(target=self._hebing_pro, args=(protxt,tr('Concatenating final audio')), daemon=True).start()
          # 强制使用 cache_folder 作为 cwd，避免相对路径问题
@@ -208,6 +221,18 @@
          tools.runffmpeg(cmd, force_cpu=True, cmd_dir=self.cache_folder)
          self.concat_video_is_end=True
          if Path(temp_wav).exists():
+@@ -853,7 +942,9 @@ class TtsSpeedRate(SpeedRate):
+             if not current.get('filename') or not Path(current['filename']).exists():
+                 # 生成占位静音
+                 dummy_wav = Path(self.cache_folder, f'silent_place_{i}.wav').as_posix()
+-                AudioSegment.silent(duration=current['source_duration']).export(dummy_wav, format="wav")
++                AudioSegment.silent(duration=current['source_duration'],
++                                    frame_rate=self.AUDIO_SAMPLE_RATE) \
++                    .set_channels(self.AUDIO_CHANNELS).export(dummy_wav, format="wav")
+                 current['filename'] = dummy_wav
+                 current['dubb_time'] = current['source_duration']
+                 logger.debug(f"[Prepare] 字幕[{current['line']}] 无配音，生成 {current['source_duration']}ms 静音占位")
+
 --- a/videotrans/task/_stage_align.py
 +++ b/videotrans/task/_stage_align.py
 @@ -1,15 +1,106 @@

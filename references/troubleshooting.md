@@ -46,6 +46,26 @@ ffmpeg 转码。
 - 失败行应从逐行缓存重建，或重跑 `dub`（`DUBBING_CACHE` 会复用 190 句，只补失败行）；
 - `doctor`/QC 会检查成品采样率和时长。
 
+## 成片音频变成源片数倍长（占位静音采样率污染）
+
+现象：成品时长是源片的 8–9 倍（例：源 315s → 成片 2356s），两次重跑结果**精确相同**；
+日志 `音频片段连接后，实际时长 2356445ms`，而 `连接音频前，配音音频总时长累计: _total_ms=270678ms`。
+原因：某条字幕没有配音文件（极短字幕、TTS 跳过）时，`_rate.py` 生成 `silent_place_{i}.wav`
+占位静音，`AudioSegment.silent(duration=...)` 未指定采样率/声道，pydub 默认 **11025 Hz 单声道**。
+该文件若是 concat 的第一个输入，ffmpeg 按首文件时间基解释后续 48 kHz 双声道片段，
+时长被放大 192000/22050 = **8.707×**。
+诊断：
+
+- 捕获 `vendor/pyvideotrans/tmp/<pid>/<uuid>/final_audio_concat.txt` 和同目录 wav
+  （任务结束会删 tmp，需在运行中抓取）；
+- 对清单里每个文件跑 `ffprobe -show_entries stream=sample_rate,channels`，混入的
+  `11025,1` 文件就是污染源；
+- 用同一清单 `ffmpeg -f concat -safe 0 -i ... -ar 48000 -ac 2 -c:a pcm_s16le` 可稳定复现。
+
+处理：本项目 `_rate.py` 已把两处 `silent_place` 生成改为 `frame_rate=self.AUDIO_SAMPLE_RATE`
+并 `.set_channels(self.AUDIO_CHANNELS)`（见 `patches/pyvideotrans.patch`）；直接重跑该视频，
+逐句缓存命中，只重做 dub+post。
+
 ## IndexTTS2 越跑越慢
 
 先读 `performance.md`：GPU 锁频、CPU 性能、daemon 优先级/亲和性、probe/tts_stability。
@@ -93,7 +113,13 @@ GPU 已锁频且 CPU 稳定但 GPT 仍随句数上升时，才考虑 `index_rest
 `duration_tol_s`（默认 15s）只是绝对下限，不会把上下界合并成一个宽松值。处理：
 
 - 低于下界：检查是否有 TTS 失败行/静音占位，或视频被异常过度加快；
+- 低于下界但内容完整：源文件**尾部可能有很长的静音/空白**（例：源 875s，但
+  `transcript/*.md` 与原 `.vtt` 都止于 464s，尾部约 411s 静音）。成片按有效内容加速后
+  自然短于「源文件总时长 ÷ 1.25」算出的下界。核对 transcript 与 `.vtt` 的最后时间戳、
+  尾部 `silencedetect`；确认内容完整后按**有效内容时长**口径放行，不要重跑（重跑只会把
+  空白视频带回来）；
 - 高于上界：配音过长、重复，或视频慢放过度；
+- 高于上界数倍且两次重跑完全一致：见「成片音频变成源片数倍长（占位静音采样率污染）」；
 - 需要更严格时调小 `max_video_speedup_rate`，但会重新留下更多句间空白；
 - 不要为了过 QC 把 `max_video_speedup_rate` 降到 1.0（会回到长空白模式）。
 
