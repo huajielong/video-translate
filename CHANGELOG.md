@@ -2,6 +2,12 @@
 
 ## 2026-10-30
 
+- Add `scripts/audio_probe.py` for isolated "crackle" inside a word:
+  `DUBBING_CACHE` keys exclude the sampling seed, so one bad IndexTTS2 take is
+  frozen forever and copied by every rebuild. The tool reports 4-10 kHz band
+  candidates and (after a cache-cleared rebuild) an A/B comparison marking
+  windows that dropped 10x or more, which separates a bad sample from a normal
+  plosive/fricative. Documented in `references/troubleshooting.md`.
 - Install pyVideoTrans/IndexTTS2 outside the skill directory by default
   (Windows `%LOCALAPPDATA%\video-translate\vendor`, macOS
   `~/Library/Application Support/video-translate/vendor`, Linux

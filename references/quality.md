@@ -66,6 +66,7 @@
 | 响度 | -18 ±1 LUFS，true peak ≤ -1 dBFS |
 | 字幕 | 每条 **1 行**、CJK ≤22 字，无空块/重复 |
 | 句间停顿 | 约 `max_phrase_pause_ms`（默认 300ms），无异常长空白/爆音 |
+| 句内爆音 | 无孤立 1–2ms 高频尖峰；用 `scripts/audio_probe.py` 定位并清缓存重合成 A/B 确认 |
 | 术语命中 | ≥95%（允许保留英文术语） |
 | ASR 回读 | 抽检 CER ≤10% |
 

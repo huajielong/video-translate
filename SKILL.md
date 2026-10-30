@@ -105,7 +105,9 @@ Windows 后台/Agent 运行用 `pythonw scripts/pipeline.pyw <command>`：解释
 6. `post` 统一 loudnorm；QC 按 `max_video_speedup_rate` / `max_video_pts_rate` 计算
    时长上下界，`duration_tol_s`（默认 15s）只是绝对下限，容忍视频变速造成的漂移。
 7. 交付前看 `<out>/QC_SUMMARY.md`：QC PASS、每条一行、字幕与音画同步、句间空白约 300ms。
-   句间仍有长空白/爆音时按 `references/troubleshooting.md` 的“句间”两节排查。
+   句间仍有长空白/爆音，或句内出现“咔哒”时，按 `references/troubleshooting.md` 的
+   “句间/句内爆音”两节排查；句内爆音用 `scripts/audio_probe.py` 定位并 A/B 验证，
+   通常是逐句配音缓存里的坏样本，清 `dubbing_cache` 重跑即可，不要去改音频降噪。
 
 按视频情况调参：
 
@@ -130,7 +132,7 @@ Windows 后台/Agent 运行用 `pythonw scripts/pipeline.pyw <command>`：解释
 | 理解阶段、并发、断点续跑、dub-only | `references/pipeline.md` |
 | 调字幕/翻译/克隆/响度/QC 质量 | `references/quality.md` |
 | 配音忽快忽慢、短句被加速、句间停顿、`fit_*` 标定 | `references/audio-fit.md` |
-| 句间长空白、句间“嗖”声/爆音、字幕与音画不同步 | `references/troubleshooting.md` |
+| 句间长空白、句间“嗖”声、句内“咔哒”爆音、字幕与音画不同步 | `references/troubleshooting.md` |
 | 首次安装、迁移新机器、端口与安全 | `references/deployment.md` |
 | 报错、两层字幕、CUDA_FATAL、QC 时长失败 | `references/troubleshooting.md` |
 | Windows 弹黑窗、conhost、`.cmd`、进程模型 | `references/deployment.md` |
