@@ -1,6 +1,120 @@
+diff --git a/indextts/gpt/model_v2.py b/indextts/gpt/model_v2.py
+index 3de3ac6..af81ab0 100644
+--- a/indextts/gpt/model_v2.py
++++ b/indextts/gpt/model_v2.py
+@@ -1,4 +1,5 @@
+ import functools
++import os
+ 
+ import torch
+ import torch.nn as nn
+@@ -307,7 +308,7 @@ class UnifiedVoice(nn.Module):
+                  start_text_token=0, stop_text_token=1, number_mel_codes=8194, start_mel_token=8192, stop_mel_token=8193,
+                  train_solo_embeddings=False, use_mel_codes_as_input=True,
+                  checkpointing=True, types=1,
+-                 condition_num_latent=32, condition_type="perceiver", condition_module=None, emo_condition_module=None, use_accel=False):
++                 condition_num_latent=32, condition_type="perceiver", condition_module=None, emo_condition_module=None):
+         """
+         Args:
+             layers: Number of layers in transformer stack.
+@@ -409,9 +410,6 @@ class UnifiedVoice(nn.Module):
+         for module in embeddings:
+             module.weight.data.normal_(mean=0.0, std=.02)
+ 
+-        self.use_accel = use_accel
+-        self.accel_engine = None  # Will be initialized in post_init_gpt2_config
+-
+     def post_init_gpt2_config(self, use_deepspeed=False, kv_cache=False, half=False):
+         seq_length = self.max_mel_tokens + self.max_text_tokens + 2
+         gpt_config = GPT2Config(
+@@ -424,38 +422,6 @@ class UnifiedVoice(nn.Module):
+             gradient_checkpointing=False,
+             use_cache=True,
+         )
+-
+-        if self.use_accel and torch.cuda.is_available():
+-            # Check if flash attention is available
+-            try:
+-                import flash_attn
+-            except ImportError:
+-                raise ImportError("flash_attn is required for acceleration but not installed. Please install from https://github.com/Dao-AILab/flash-attention/releases/")
+-
+-            from indextts.accel import GPT2AccelModel, AccelInferenceEngine
+-
+-            # Create accel model
+-            accel_gpt = GPT2AccelModel(gpt_config)
+-            accel_gpt.load_state_dict(self.gpt.state_dict(), strict=False)
+-
+-            if half:
+-                accel_gpt = accel_gpt.half().cuda()
+-            else:
+-                accel_gpt = accel_gpt.cuda()
+-            accel_gpt.eval()
+-
+-            lm_head_with_norm = nn.Sequential(self.final_norm, self.mel_head)
+-            self.accel_engine = AccelInferenceEngine(
+-                model=accel_gpt,
+-                lm_head=lm_head_with_norm,
+-                num_layers=self.layers,
+-                num_heads=self.heads,
+-                head_dim=self.model_dim // self.heads,
+-                block_size=256,
+-                num_blocks=16,  # Reduce to save memory (16*256 = 4096 tokens capacity)
+-                use_cuda_graph=True,
+-            )
+-            print("acceleration engine initialized")
+         self.inference_model = GPT2InferenceModel(
+             gpt_config,
+             self.gpt,
+@@ -481,6 +447,10 @@ class UnifiedVoice(nn.Module):
+             self.inference_model = self.ds_engine.module.eval()
+         else:
+             self.inference_model = self.inference_model.eval()
++            if os.environ.get("INDEXTTS2_COMPILE", "0") == "1":
++                self.inference_model = torch.compile(
++                    self.inference_model, mode="reduce-overhead",
++                    fullgraph=False, dynamic=True)
+ 
+         # self.inference_model = PrunedGPT2InferenceModel(gpt_config, self.gpt, self.mel_pos_embedding, self.mel_embedding, self.final_norm, self.mel_head)
+         self.gpt.wte = self.mel_embedding
+@@ -756,26 +726,12 @@ class UnifiedVoice(nn.Module):
+             min_tokens_to_keep = 2 if hf_generate_kwargs.get("num_beams", 1) > 1 else 1
+             logits_processor.append(TypicalLogitsWarper(mass=typical_mass, min_tokens_to_keep=min_tokens_to_keep))
+         max_length = (trunc_index + self.max_mel_tokens - 1) if max_generate_length is None else trunc_index + max_generate_length
+-        
+-        # Use accel engine if available (single sequence only)
+-        if self.accel_engine is not None and num_return_sequences == 1:
+-            output = self.accel_engine.generate(
+-                inputs,  # fake input_ids (all 1s + start_mel_token)
+-                max_new_tokens=max_length - trunc_index,
+-                attention_mask=attention_mask,
+-                temperature=hf_generate_kwargs.get('temperature', 1),
+-                stop_tokens=[self.stop_mel_token],
+-                tts_embeddings=inputs_embeds,  # [pad][cond][text] embeddings (87 tokens, NO start_mel_token)
+-                tts_mel_embedding=self.inference_model.embeddings,  # mel_embedding layer
+-                tts_text_pos_embedding=self.inference_model.text_pos_embedding,  # text_pos_embedding layer
+-            )
+-        else:
+-            output = self.inference_model.generate(inputs, 
+-                                                bos_token_id=self.start_mel_token, pad_token_id=self.stop_mel_token,
+-                                                eos_token_id=self.stop_mel_token, attention_mask=attention_mask,
+-                                                max_length=max_length, logits_processor=logits_processor,
+-                                                num_return_sequences=num_return_sequences,
+-                                                **hf_generate_kwargs)
++        output = self.inference_model.generate(inputs, 
++                                            bos_token_id=self.start_mel_token, pad_token_id=self.stop_mel_token,
++                                            eos_token_id=self.stop_mel_token, attention_mask=attention_mask,
++                                            max_length=max_length, logits_processor=logits_processor,
++                                            num_return_sequences=num_return_sequences,
++                                            **hf_generate_kwargs)
+         if isinstance(output, torch.Tensor):
+             return output[:, trunc_index:], speech_conditioning_latent
+         # GenerateOutput
+diff --git a/indextts/infer_v2.py b/indextts/infer_v2.py
+index 43efc8e..7001d1a 100644
 --- a/indextts/infer_v2.py
 +++ b/indextts/infer_v2.py
-@@ -38,7 +38,7 @@
+@@ -38,7 +38,7 @@ import torch.nn.functional as F
  class IndexTTS2:
      def __init__(
              self, cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_fp16=False, device=None,
@@ -9,7 +123,7 @@
      ):
          """
          Args:
-@@ -48,8 +48,6 @@
+@@ -48,8 +48,6 @@ class IndexTTS2:
              device (str): device to use (e.g., 'cuda:0', 'cpu'). If None, it will be set automatically based on the availability of CUDA or MPS.
              use_cuda_kernel (None | bool): whether to use BigVGan custom fused activation CUDA kernel, only for CUDA device.
              use_deepspeed (bool): whether to use DeepSpeed or not.
@@ -18,21 +132,25 @@
          """
          if device is not None:
              self.device = device
-@@ -77,12 +75,10 @@
+@@ -77,12 +75,13 @@ class IndexTTS2:
          self.model_dir = model_dir
          self.dtype = torch.float16 if self.use_fp16 else None
          self.stop_mel_token = self.cfg.gpt.stop_mel_token
 -        self.use_accel = use_accel
 -        self.use_torch_compile = use_torch_compile
  
-         self.qwen_emo = QwenEmotion(os.path.join(self.model_dir, self.cfg.qwen_emo_path))
+-        self.qwen_emo = QwenEmotion(os.path.join(self.model_dir, self.cfg.qwen_emo_path))
++        # The 0.6B emotion-text model is only needed for use_emo_text; load it
++        # lazily so a clone-only deployment can omit its 1.2GB checkpoint.
++        self.qwen_emo = None
++        self._qwen_emo_dir = os.path.join(self.model_dir, self.cfg.qwen_emo_path)
  
 -        self.gpt = UnifiedVoice(**self.cfg.gpt, use_accel=self.use_accel)
 +        self.gpt = UnifiedVoice(**self.cfg.gpt)
          self.gpt_path = os.path.join(self.model_dir, self.cfg.gpt_checkpoint)
          load_checkpoint(self.gpt, self.gpt_path)
          self.gpt = self.gpt.to(self.device)
-@@ -139,13 +135,6 @@
+@@ -139,13 +138,6 @@ class IndexTTS2:
          )
          self.s2mel = s2mel.to(self.device)
          self.s2mel.models['cfm'].estimator.setup_caches(max_batch_size=1, max_seq_length=8192)
@@ -46,7 +164,7 @@
          self.s2mel.eval()
          print(">> s2mel weights restored from:", s2mel_path)
  
-@@ -167,17 +156,11 @@
+@@ -167,18 +159,12 @@ class IndexTTS2:
          print(">> bigvgan weights restored from:", bigvgan_name)
  
          self.bpe_path = os.path.join(self.model_dir, self.cfg.dataset["bpe_model"])
@@ -56,16 +174,17 @@
          print(">> TextNormalizer loaded")
          self.tokenizer = TextTokenizer(self.bpe_path, self.normalizer)
          print(">> bpe model loaded from:", self.bpe_path)
--
+ 
 -        # 加载术语词汇表（如果存在）
 -        self.glossary_path = os.path.join(self.model_dir, "glossary.yaml")
 -        if os.path.exists(self.glossary_path):
 -            self.normalizer.load_glossary_from_yaml(self.glossary_path)
 -            print(">> Glossary loaded from:", self.glossary_path)
- 
+-
          emo_matrix = torch.load(os.path.join(self.model_dir, self.cfg.emo_matrix))
          self.emo_matrix = emo_matrix.to(self.device)
-@@ -282,20 +265,6 @@
+         self.emo_num = list(self.cfg.emo_num)
+@@ -282,20 +268,6 @@ class IndexTTS2:
          code_lens = torch.tensor(code_lens, dtype=torch.long, device=device)
          return codes, code_lens
  
@@ -86,7 +205,7 @@
      def insert_interval_silence(self, wavs, sampling_rate=22050, interval_silence=200):
          """
          Insert silences between generated segments.
-@@ -358,32 +327,7 @@
+@@ -358,32 +330,7 @@ class IndexTTS2:
                emo_audio_prompt=None, emo_alpha=1.0,
                emo_vector=None,
                use_emo_text=False, emo_text=None, use_random=False, interval_silence=200,
@@ -120,7 +239,16 @@
          print(">> starting inference...")
          self._set_gr_progress(0, "starting inference...")
          if verbose:
-@@ -425,6 +369,10 @@
+@@ -402,6 +349,8 @@ class IndexTTS2:
+             # automatically generate emotion vectors from text prompt
+             if emo_text is None:
+                 emo_text = text  # use main text prompt
++            if self.qwen_emo is None:
++                self.qwen_emo = QwenEmotion(self._qwen_emo_dir)
+             emo_dict = self.qwen_emo.inference(emo_text)
+             print(f"detected emotion vectors from text: {emo_dict}")
+             # convert ordered dict to list of vectors; the order is VERY important!
+@@ -425,6 +374,10 @@ class IndexTTS2:
              emo_alpha = 1.0
  
          # 如果参考音频改变了，才需要重新生成, 提升速度
@@ -131,7 +259,7 @@
          if self.cache_spk_cond is None or self.cache_spk_audio_prompt != spk_audio_prompt:
              if self.cache_spk_cond is not None:
                  self.cache_spk_cond = None
-@@ -470,7 +418,7 @@
+@@ -470,7 +423,7 @@ class IndexTTS2:
              ref_mel = self.cache_mel
  
          if emo_vector is not None:
@@ -140,7 +268,7 @@
              if use_random:
                  random_index = [random.randint(0, x - 1) for x in self.emo_num]
              else:
-@@ -501,15 +449,8 @@
+@@ -501,15 +454,8 @@ class IndexTTS2:
  
          self._set_gr_progress(0.1, "text processing...")
          text_tokens_list = self.tokenizer.tokenize(text)
@@ -157,7 +285,7 @@
          if verbose:
              print("text_tokens_list:", text_tokens_list)
              print("segments count:", segments_count)
-@@ -531,8 +472,8 @@
+@@ -531,8 +477,8 @@ class IndexTTS2:
          gpt_forward_time = 0
          s2mel_time = 0
          bigvgan_time = 0
@@ -167,7 +295,7 @@
          for seg_idx, sent in enumerate(segments):
              self._set_gr_progress(0.2 + 0.7 * seg_idx / segments_count,
                                    f"speech synthesis {seg_idx + 1}/{segments_count}...")
-@@ -597,16 +538,15 @@
+@@ -597,16 +543,15 @@ class IndexTTS2:
                  #                     print(f"code len: {code_lens}")
  
                  code_lens = []
@@ -188,7 +316,7 @@
                  code_lens = torch.LongTensor(code_lens)
                  code_lens = code_lens.to(self.device)
                  if verbose:
-@@ -634,7 +574,7 @@
+@@ -634,7 +579,7 @@ class IndexTTS2:
                  dtype = None
                  with torch.amp.autocast(text_tokens.device.type, enabled=dtype is not None, dtype=dtype):
                      m_start_time = time.perf_counter()
@@ -197,7 +325,7 @@
                      inference_cfg_rate = 0.7
                      latent = self.s2mel.models['gpt_layer'](latent)
                      S_infer = self.semantic_codec.quantizer.vq2emb(codes.unsqueeze(1))
-@@ -666,11 +606,6 @@
+@@ -666,11 +611,6 @@ class IndexTTS2:
                      print(f"wav shape: {wav.shape}", "min:", wav.min(), "max:", wav.max())
                  # wavs.append(wav[:, :-512])
                  wavs.append(wav.cpu())  # to cpu before saving
@@ -209,7 +337,7 @@
          end_time = time.perf_counter()
  
          self._set_gr_progress(0.9, "saving audio...")
-@@ -685,6 +620,47 @@
+@@ -685,6 +625,47 @@ class IndexTTS2:
          print(f">> Generated audio length: {wav_length:.2f} seconds")
          print(f">> RTF: {(end_time - start_time) / wav_length:.4f}")
  
@@ -257,7 +385,7 @@
          # save audio
          wav = wav.cpu()  # to cpu
          if output_path:
-@@ -696,16 +672,12 @@
+@@ -696,16 +677,12 @@ class IndexTTS2:
                  os.makedirs(os.path.dirname(output_path), exist_ok=True)
              torchaudio.save(output_path, wav.type(torch.int16), sampling_rate)
              print(">> wav file saved to:", output_path)
@@ -276,7 +404,7 @@
  
  
  def find_most_similar_cosine(query_vector, matrix):
-@@ -833,19 +805,6 @@
+@@ -833,19 +810,6 @@ class QwenEmotion:
  if __name__ == "__main__":
      prompt_wav = "examples/voice_01.wav"
      text = '欢迎大家来体验indextts2，并给予我们意见与反馈，谢谢大家。'
@@ -298,119 +426,11 @@
 -        tts.infer(spk_audio_prompt=prompt_wav, text=text, output_path="gen.wav", verbose=True)
 -        time_buckets.append(time.time() - start_time)
 -    print(time_buckets)
---- a/indextts/gpt/model_v2.py
-+++ b/indextts/gpt/model_v2.py
-@@ -1,4 +1,5 @@
- import functools
-+import os
- 
- import torch
- import torch.nn as nn
-@@ -307,7 +308,7 @@
-                  start_text_token=0, stop_text_token=1, number_mel_codes=8194, start_mel_token=8192, stop_mel_token=8193,
-                  train_solo_embeddings=False, use_mel_codes_as_input=True,
-                  checkpointing=True, types=1,
--                 condition_num_latent=32, condition_type="perceiver", condition_module=None, emo_condition_module=None, use_accel=False):
-+                 condition_num_latent=32, condition_type="perceiver", condition_module=None, emo_condition_module=None):
-         """
-         Args:
-             layers: Number of layers in transformer stack.
-@@ -409,9 +410,6 @@
-         for module in embeddings:
-             module.weight.data.normal_(mean=0.0, std=.02)
- 
--        self.use_accel = use_accel
--        self.accel_engine = None  # Will be initialized in post_init_gpt2_config
--
-     def post_init_gpt2_config(self, use_deepspeed=False, kv_cache=False, half=False):
-         seq_length = self.max_mel_tokens + self.max_text_tokens + 2
-         gpt_config = GPT2Config(
-@@ -424,38 +422,6 @@
-             gradient_checkpointing=False,
-             use_cache=True,
-         )
--
--        if self.use_accel and torch.cuda.is_available():
--            # Check if flash attention is available
--            try:
--                import flash_attn
--            except ImportError:
--                raise ImportError("flash_attn is required for acceleration but not installed. Please install from https://github.com/Dao-AILab/flash-attention/releases/")
--
--            from indextts.accel import GPT2AccelModel, AccelInferenceEngine
--
--            # Create accel model
--            accel_gpt = GPT2AccelModel(gpt_config)
--            accel_gpt.load_state_dict(self.gpt.state_dict(), strict=False)
--
--            if half:
--                accel_gpt = accel_gpt.half().cuda()
--            else:
--                accel_gpt = accel_gpt.cuda()
--            accel_gpt.eval()
--
--            lm_head_with_norm = nn.Sequential(self.final_norm, self.mel_head)
--            self.accel_engine = AccelInferenceEngine(
--                model=accel_gpt,
--                lm_head=lm_head_with_norm,
--                num_layers=self.layers,
--                num_heads=self.heads,
--                head_dim=self.model_dim // self.heads,
--                block_size=256,
--                num_blocks=16,  # Reduce to save memory (16*256 = 4096 tokens capacity)
--                use_cuda_graph=True,
--            )
--            print("acceleration engine initialized")
-         self.inference_model = GPT2InferenceModel(
-             gpt_config,
-             self.gpt,
-@@ -481,6 +447,10 @@
-             self.inference_model = self.ds_engine.module.eval()
-         else:
-             self.inference_model = self.inference_model.eval()
-+            if os.environ.get("INDEXTTS2_COMPILE", "0") == "1":
-+                self.inference_model = torch.compile(
-+                    self.inference_model, mode="reduce-overhead",
-+                    fullgraph=False, dynamic=True)
- 
-         # self.inference_model = PrunedGPT2InferenceModel(gpt_config, self.gpt, self.mel_pos_embedding, self.mel_embedding, self.final_norm, self.mel_head)
-         self.gpt.wte = self.mel_embedding
-@@ -756,26 +726,12 @@
-             min_tokens_to_keep = 2 if hf_generate_kwargs.get("num_beams", 1) > 1 else 1
-             logits_processor.append(TypicalLogitsWarper(mass=typical_mass, min_tokens_to_keep=min_tokens_to_keep))
-         max_length = (trunc_index + self.max_mel_tokens - 1) if max_generate_length is None else trunc_index + max_generate_length
--        
--        # Use accel engine if available (single sequence only)
--        if self.accel_engine is not None and num_return_sequences == 1:
--            output = self.accel_engine.generate(
--                inputs,  # fake input_ids (all 1s + start_mel_token)
--                max_new_tokens=max_length - trunc_index,
--                attention_mask=attention_mask,
--                temperature=hf_generate_kwargs.get('temperature', 1),
--                stop_tokens=[self.stop_mel_token],
--                tts_embeddings=inputs_embeds,  # [pad][cond][text] embeddings (87 tokens, NO start_mel_token)
--                tts_mel_embedding=self.inference_model.embeddings,  # mel_embedding layer
--                tts_text_pos_embedding=self.inference_model.text_pos_embedding,  # text_pos_embedding layer
--            )
--        else:
--            output = self.inference_model.generate(inputs, 
--                                                bos_token_id=self.start_mel_token, pad_token_id=self.stop_mel_token,
--                                                eos_token_id=self.stop_mel_token, attention_mask=attention_mask,
--                                                max_length=max_length, logits_processor=logits_processor,
--                                                num_return_sequences=num_return_sequences,
--                                                **hf_generate_kwargs)
-+        output = self.inference_model.generate(inputs, 
-+                                            bos_token_id=self.start_mel_token, pad_token_id=self.stop_mel_token,
-+                                            eos_token_id=self.stop_mel_token, attention_mask=attention_mask,
-+                                            max_length=max_length, logits_processor=logits_processor,
-+                                            num_return_sequences=num_return_sequences,
-+                                            **hf_generate_kwargs)
-         if isinstance(output, torch.Tensor):
-             return output[:, trunc_index:], speech_conditioning_latent
-         # GenerateOutput
+diff --git a/indextts/s2mel/modules/commons.py b/indextts/s2mel/modules/commons.py
+index 63c14b3..35fced4 100644
 --- a/indextts/s2mel/modules/commons.py
 +++ b/indextts/s2mel/modules/commons.py
-@@ -133,10 +133,8 @@
+@@ -133,10 +133,8 @@ def subsequent_mask(length):
  def fused_add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
      n_channels_int = n_channels[0]
      in_act = input_a + input_b
@@ -423,11 +443,10 @@
      acts = t_act * s_act
      return acts
  
-@@ -438,15 +436,6 @@
-     def forward_gpt(self,x):
+@@ -439,15 +437,6 @@ class MyModel(nn.Module):
          x = self.models['gpt_layer'](x)
          return x
--
+ 
 -    def enable_torch_compile(self):
 -        """Enable torch.compile optimization.
 -        
@@ -436,12 +455,15 @@
 -        """
 -        if 'cfm' in self.models:
 -            self.models['cfm'].enable_torch_compile()
+-
  
  
- 
+ def build_model(args, stage="DiT"):
+diff --git a/indextts/s2mel/modules/diffusion_transformer.py b/indextts/s2mel/modules/diffusion_transformer.py
+index 1606a40..23d6912 100644
 --- a/indextts/s2mel/modules/diffusion_transformer.py
 +++ b/indextts/s2mel/modules/diffusion_transformer.py
-@@ -233,7 +233,7 @@
+@@ -233,7 +233,7 @@ class DiT(torch.nn.Module):
          if self.time_as_token: # False
              x_in = torch.cat([t1.unsqueeze(1), x_in], dim=1)
              
@@ -450,9 +472,11 @@
          input_pos = self.input_pos[:x_in.size(1)]  # (T,) range（0，1863）
          x_mask_expanded = x_mask[:, None, :].repeat(1, 1, x_in.size(1), 1) if not self.is_causal else None # torch.Size([1, 1, 1863, 1863]
          x_res = self.transformer(x_in, t1.unsqueeze(1), input_pos, x_mask_expanded) # [2, 1863, 512]
+diff --git a/indextts/s2mel/modules/flow_matching.py b/indextts/s2mel/modules/flow_matching.py
+index 245c71f..c396695 100644
 --- a/indextts/s2mel/modules/flow_matching.py
 +++ b/indextts/s2mel/modules/flow_matching.py
-@@ -169,18 +169,3 @@
+@@ -169,18 +169,3 @@ class CFM(BASECFM):
              self.estimator = DiT(args)
          else:
              raise NotImplementedError(f"Unknown diffusion type {args.dit_type}")
@@ -471,9 +495,11 @@
 -            fullgraph=True,
 -            dynamic=True,
 -        )
+diff --git a/indextts/utils/common.py b/indextts/utils/common.py
+index 933f163..eb2f89a 100644
 --- a/indextts/utils/common.py
 +++ b/indextts/utils/common.py
-@@ -62,23 +62,22 @@
+@@ -62,23 +62,22 @@ def de_tokenized_by_CJK_char(line: str, do_lower_case=False) -> str:
        output = "see you!"
      """
      # replace english words in the line with placeholders
@@ -505,6 +531,8 @@
      return "".join(words)
  
  
+diff --git a/indextts/utils/front.py b/indextts/utils/front.py
+index 5941598..7f69fac 100644
 --- a/indextts/utils/front.py
 +++ b/indextts/utils/front.py
 @@ -1,5 +1,4 @@
@@ -513,7 +541,7 @@
  import os
  import traceback
  import re
-@@ -10,7 +9,7 @@
+@@ -10,7 +9,7 @@ from sentencepiece import SentencePieceProcessor
  
  
  class TextNormalizer:
@@ -522,7 +550,7 @@
          self.zh_normalizer = None
          self.en_normalizer = None
          self.char_rep_map = {
-@@ -54,24 +53,6 @@
+@@ -54,24 +53,6 @@ class TextNormalizer:
              "$": ".",
              **self.char_rep_map,
          }
@@ -547,22 +575,22 @@
  
      def match_email(self, email):
          # 正则表达式匹配邮箱格式：数字英文@数字英文.英文
-@@ -88,14 +69,6 @@
-     """
-     匹配人名，格式：中文·中文，中文·中文-中文
+@@ -90,14 +71,6 @@ class TextNormalizer:
      例如：克里斯托弗·诺兰，约瑟夫·高登-莱维特
--    """
--
+     """
+ 
 -    TECH_TERM_PATTERN = r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+"
 -    """
 -    匹配技术术语，格式：字母开头+(字母或数字)*+(-字母或数字)+
 -    例如：GPT-5-nano, F5-TTS, Fish-Speech, GPT-5, CosyVoice-2
 -    必须以字母开头，避免匹配纯数字（如电话号码 135-4567-8900）
 -    用于保护连字符结构，防止中文normalizer将连字符解析为减号（如"负五减"）
-     """
- 
+-    """
+-
      # 匹配常见英语缩写 's，仅用于替换为 is，不匹配所有 's
-@@ -143,13 +116,8 @@
+     ENGLISH_CONTRACTION_PATTERN = r"(what|where|who|which|how|t?here|it|s?he|that|this)'s"
+ 
+@@ -143,13 +116,8 @@ class TextNormalizer:
              return ""
          if self.use_chinese(text):
              text = re.sub(TextNormalizer.ENGLISH_CONTRACTION_PATTERN, r"\1 is", text, flags=re.IGNORECASE)
@@ -578,7 +606,7 @@
              replaced_text, original_name_list = self.save_names(replaced_text)
              try:
                  result = self.zh_normalizer.normalize(replaced_text)
-@@ -160,21 +128,12 @@
+@@ -160,21 +128,12 @@ class TextNormalizer:
              result = self.restore_names(result, original_name_list)
              # 恢复拼音声调
              result = self.restore_pinyin_tones(result, pinyin_list)
@@ -601,11 +629,10 @@
              except Exception:
                  result = text
                  print(traceback.format_exc())
-@@ -228,133 +187,6 @@
-             number = chr(ord("a") + i)
+@@ -229,133 +188,6 @@ class TextNormalizer:
              transformed_text = transformed_text.replace(f"<n_{number}>", name)
          return transformed_text
--
+ 
 -    def save_tech_terms(self, original_text):
 -        """
 -        保护技术术语中的连字符，防止被中文normalizer解析为减号
@@ -732,10 +759,11 @@
 -        import yaml
 -        with open(glossary_path, 'w', encoding='utf-8') as f:
 -            yaml.dump(self.term_glossary, f, allow_unicode=True, default_flow_style=False)
- 
+-
      def save_pinyin_tones(self, original_text):
          """
-@@ -511,10 +343,7 @@
+         替换拼音声调为占位符 <pinyin_a>, <pinyin_b>, ...
+@@ -511,10 +343,7 @@ class TextTokenizer:
  
      @staticmethod
      def split_segments_by_token(
@@ -747,7 +775,7 @@
      ) -> List[List[str]]:
          """
          将tokenize后的结果按特定token进一步分割
-@@ -529,17 +358,7 @@
+@@ -529,17 +358,7 @@ class TextTokenizer:
              token = tokenized_str[i]
              current_segment.append(token)
              current_segment_tokens_len += 1
@@ -766,7 +794,7 @@
                  if token in split_tokens and current_segment_tokens_len > 2:
                      if i < len(tokenized_str) - 1:
                          if tokenized_str[i + 1] in ["'", "▁'"]:
-@@ -551,6 +370,16 @@
+@@ -551,6 +370,16 @@ class TextTokenizer:
                      current_segment_tokens_len = 0
                  continue
              # 如果当前tokens的长度超过最大限制
@@ -783,7 +811,7 @@
              else:
                  # 按照长度分割
                  sub_segments = []
-@@ -571,19 +400,14 @@
+@@ -571,19 +400,14 @@ class TextTokenizer:
          if current_segment_tokens_len > 0:
              assert current_segment_tokens_len <= max_text_tokens_per_segment
              segments.append(current_segment)
@@ -805,7 +833,7 @@
                  merged_segments[-1] = merged_segments[-1] + segment
              else:
                  merged_segments.append(segment)
-@@ -598,16 +422,16 @@
+@@ -598,16 +422,16 @@ class TextTokenizer:
          "▁?",
          "▁...", # ellipsis
      ]
@@ -825,7 +853,7 @@
  
      cases = [
          "IndexTTS 正式发布1.0版本了，效果666",
-@@ -642,18 +466,12 @@
+@@ -642,18 +466,12 @@ if __name__ == "__main__":
          "babala2是什么？",  # babala二是什么?
          "用beta1测试",  # 用beta一测试
          "have you ever been to beta2?",  # have you ever been to beta two?

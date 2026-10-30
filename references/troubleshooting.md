@@ -56,7 +56,7 @@ ffmpeg 转码。
 时长被放大 192000/22050 = **8.707×**。
 诊断：
 
-- 捕获 `vendor/pyvideotrans/tmp/<pid>/<uuid>/final_audio_concat.txt` 和同目录 wav
+- 捕获 `<pyvideotrans_home>/tmp/<pid>/<uuid>/final_audio_concat.txt` 和同目录 wav
   （任务结束会删 tmp，需在运行中抓取）；
 - 对清单里每个文件跑 `ffprobe -show_entries stream=sample_rate,channels`，混入的
   `11025,1` 文件就是污染源；
@@ -236,11 +236,11 @@ VTV_DUBBING_CACHE=D:/tmp/dubbing_cache_fresh python scripts/pipeline.py run ...
 
 ## 改了术语表但翻译没变
 
-翻译缓存键不含 glossary/prompt 内容（旧版）；改完术语表后清 `vendor/pyvideotrans/tmp/translate_cache`，或换一个输出/工作目录。
+翻译缓存键不含 glossary/prompt 内容（旧版）；改完术语表后清 `<pyvideotrans_home>/tmp/translate_cache`，或换一个输出/工作目录。
 
 ## 换课程后 QC 术语命中率不对
 
-翻译 prompt 用的是 `vendor/pyvideotrans/videotrans/glossary.txt`，而 `post`/`qc` 用的是
+翻译 prompt 用的是 `<pyvideotrans_home>/videotrans/glossary.txt`，而 `post`/`qc` 用的是
 `config.json` 的 `glossary`。如果配置还指向上一个课程的术语表，
 本课程的成品会被按旧术语表检查，出现“译文没问题但 QC 命中率低”。
 跑不同课程时显式加 `--glossary assets/glossary.txt`（或对应课程术语表）。
@@ -248,7 +248,7 @@ VTV_DUBBING_CACHE=D:/tmp/dubbing_cache_fresh python scripts/pipeline.py run ...
 
 ## 改了音色/参考音频但配音没变
 
-`DUBBING_CACHE` 键不含参考音频/模型名（旧版）；换后端或参考时清 `vendor/pyvideotrans/tmp/dubbing_cache`，或换缓存命名空间。
+`DUBBING_CACHE` 键不含参考音频/模型名（旧版）；换后端或参考时清 `<pyvideotrans_home>/tmp/dubbing_cache`，或换缓存命名空间。
 
 ## Rubberband 不可用
 
@@ -282,9 +282,10 @@ pyVideoTrans 包装脚本的问题见 `references/troubleshooting-pyvideotrans.m
 
 - `df -h /d` 确认剩余空间；0 字节时先找增长最快的目录。
 - 常见元凶：Agent 运行时把 `.claude/skills/<name>/` 镜像到 `.agents/skills/`，
-  若 `vendor/`（模型/venv/配音缓存，50GB+）仍在技能目录内会被整份复制。处理见
+  运行时默认已装在技能目录外；若你手工放回技能目录内（模型/venv/配音缓存，50GB+），
+  会被整份复制。处理见
   `deployment.md` 的“vendor 放在技能目录外”。
-- `vendor/pyvideotrans/tmp/<pid>/` 是崩溃残留的任务临时目录，可删数字目录，保留
+- `<pyvideotrans_home>/tmp/<pid>/` 是崩溃残留的任务临时目录，可删数字目录，保留
   `dubbing_cache` / `translate_cache`。
 - 清理后重跑 `batch_courses.py run`：成品与归档 QC 齐全的课会跳过。若归档仍缺项，
   用 `pipeline.py qc --video ... --source-video ... --zh ... --en ... --json-out

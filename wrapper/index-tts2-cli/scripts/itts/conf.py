@@ -44,7 +44,7 @@ SCRIPTS_DIR = SKILL_DIR / "scripts"
 CONFIG_PATH = SKILL_DIR / "config.json"
 
 # 模型完整性检查清单。比 webui.py:38-48 列得更全：那里只查了 5 个大件，
-# 但 feat1.pt / feat2.pt（音色与情感矩阵）和 qwen 情感模型同样是启动必需，
+# 但 feat1.pt / feat2.pt（音色与情感矩阵）同样是启动必需，
 # 缺了会在推理中途才炸，错误信息还很不直观。
 REQUIRED_MODEL_FILES = (
     "bpe.model",
@@ -54,9 +54,10 @@ REQUIRED_MODEL_FILES = (
     "wav2vec2bert_stats.pt",
     "feat1.pt",
     "feat2.pt",
-    "qwen0.6bemo4-merge/config.json",
-    "qwen0.6bemo4-merge/model.safetensors",
 )
+# 只从模型仓库拉取实际加载的文件：情感文本模型仅在 use_emo_text 时才需要
+# （infer_v2 里已改为懒加载），克隆配音流水线不用，没必要下 1GB+。
+MODEL_ALLOW_PATTERNS: list[str] = list(REQUIRED_MODEL_FILES)
 
 # 上游模型仓库：HF 5.49 GB / 22 个文件，正好覆盖 checkpoints/ 里除 hf_cache
 # 之外的全部内容（pinyin.vocab 只是给人看的参考清单，代码不加载）。
@@ -646,7 +647,8 @@ def download_model_files(cfg: Config, log=print) -> None:
         from huggingface_hub import snapshot_download
 
         log(f"  从 Hugging Face 拉取 {MODEL_REPO_HF} …")
-        snapshot_download(MODEL_REPO_HF, local_dir=str(cfg.model_dir))
+        snapshot_download(MODEL_REPO_HF, local_dir=str(cfg.model_dir),
+                          allow_patterns=MODEL_ALLOW_PATTERNS)
         return
     except Exception as exc:  # 网络/镜像/权限问题都可能
         hf_error = exc
@@ -656,7 +658,8 @@ def download_model_files(cfg: Config, log=print) -> None:
         from modelscope import snapshot_download as ms_download
 
         log(f"  从 ModelScope 拉取 {MODEL_REPO_MS} …")
-        ms_download(MODEL_REPO_MS, local_dir=str(cfg.model_dir))
+        ms_download(MODEL_REPO_MS, local_dir=str(cfg.model_dir),
+                    allow_patterns=MODEL_ALLOW_PATTERNS)
     except Exception as exc:
         raise CliError(
             "RESOURCE_DOWNLOAD_FAILED",

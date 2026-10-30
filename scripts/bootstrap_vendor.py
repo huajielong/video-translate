@@ -13,13 +13,19 @@ import argparse
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent.parent
-VENDOR = SKILL / "vendor"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from vendor_paths import vendor_root  # noqa: E402
+
+# Installed runtimes live outside the skill tree (see vendor_paths.py); the
+# per-user root is overridable with VTV_VENDOR_DIR / setup --vendor-dir.
+VENDOR = vendor_root()
 PVT = VENDOR / "pyvideotrans"
 ITT = VENDOR / "index-tts2-cli"
-WRAPPER = SKILL / "vendor_src" / "index-tts2-cli"
+WRAPPER = SKILL / "wrapper" / "index-tts2-cli"
 PATCHES = SKILL / "patches"
 
 PVT_URL = "https://github.com/jianchang512/pyvideotrans.git"
@@ -61,10 +67,10 @@ def _clone(url: str, tag: str, dest: Path) -> Path:
             "git is required for the automatic vendor download; install git or "
             "pass setup --reuse-pvt/--reuse-itt with an existing installation"
         )
-    tmp = VENDOR / f".{dest.name}.bootstrap-tmp"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.parent / f".{dest.name}.bootstrap-tmp"
     if tmp.exists():
         shutil.rmtree(tmp)
-    VENDOR.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     # IndexTTS2 keeps example WAVs in Git LFS; the wrapper does not need them.
     env.setdefault("GIT_LFS_SKIP_SMUDGE", "1")
@@ -87,37 +93,37 @@ def _apply(root: Path, patch: Path) -> None:
     _run(["git", "apply", "--whitespace=nowarn", str(patch)], cwd=root)
 
 
-def install_pyvideotrans() -> None:
-    if (PVT / "cli.py").is_file():
+def install_pyvideotrans(dest: Path) -> None:
+    if (dest / "cli.py").is_file():
         log("pyVideoTrans already present")
         return
-    if PVT.exists():
+    if dest.exists():
         raise RuntimeError(
-            f"{PVT} exists but is incomplete; remove it or use --reuse-pvt"
+            f"{dest} exists but is incomplete; remove it or use --reuse-pvt"
         )
     log(f"cloning pyVideoTrans {PVT_TAG}")
-    tmp = _clone(PVT_URL, PVT_TAG, PVT)
+    tmp = _clone(PVT_URL, PVT_TAG, dest)
     try:
         _normalize(tmp, PVT_FILES)
         _apply(tmp, PATCHES / "pyvideotrans.patch")
-        tmp.rename(PVT)
+        tmp.rename(dest)
     except Exception:
         shutil.rmtree(tmp, ignore_errors=True)
         raise
 
 
-def install_index_tts() -> None:
-    if (ITT / "scripts" / "indextts2.py").is_file() and (ITT / "indextts").is_dir():
+def install_index_tts(dest: Path) -> None:
+    if (dest / "scripts" / "indextts2.py").is_file() and (dest / "indextts").is_dir():
         log("IndexTTS2 CLI already present")
         return
-    if ITT.exists():
+    if dest.exists():
         raise RuntimeError(
-            f"{ITT} exists but is incomplete; remove it or use --reuse-itt"
+            f"{dest} exists but is incomplete; remove it or use --reuse-itt"
         )
     if not WRAPPER.is_dir():
         raise RuntimeError(f"wrapper source missing: {WRAPPER}")
     log(f"cloning IndexTTS2 {ITT_TAG}")
-    tmp = _clone(ITT_URL, ITT_TAG, ITT)
+    tmp = _clone(ITT_URL, ITT_TAG, dest)
     try:
         for child in WRAPPER.iterdir():
             target = tmp / child.name
@@ -127,23 +133,27 @@ def install_index_tts() -> None:
                 shutil.copy2(child, target)
         _normalize(tmp, ITT_FILES)
         _apply(tmp, PATCHES / "index-tts.patch")
-        tmp.rename(ITT)
+        tmp.rename(dest)
     except Exception:
         shutil.rmtree(tmp, ignore_errors=True)
         raise
 
 
-def ensure_vendor(install_pvt: bool = True, install_itt: bool = True) -> None:
-    VENDOR.mkdir(parents=True, exist_ok=True)
+def ensure_vendor(install_pvt: bool = True, install_itt: bool = True,
+                  vendor: str | os.PathLike | None = None) -> None:
+    root = Path(vendor).expanduser().resolve() if vendor else VENDOR
+    root.mkdir(parents=True, exist_ok=True)
+    pvt = root / "pyvideotrans"
+    itt = root / "index-tts2-cli"
     if install_pvt:
-        install_pyvideotrans()
+        install_pyvideotrans(pvt)
     if install_itt:
-        install_index_tts()
-    if install_pvt and not (PVT / "cli.py").is_file():
+        install_index_tts(itt)
+    if install_pvt and not (pvt / "cli.py").is_file():
         raise RuntimeError("pyVideoTrans bootstrap did not produce cli.py")
-    if install_itt and not (ITT / "scripts" / "indextts2.py").is_file():
+    if install_itt and not (itt / "scripts" / "indextts2.py").is_file():
         raise RuntimeError("IndexTTS2 bootstrap did not produce scripts/indextts2.py")
-    log("vendor ready")
+    log(f"vendor ready: {root}")
 
 
 def main() -> int:

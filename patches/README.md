@@ -34,7 +34,7 @@ the whole track by 8.707 (source 315 s → output 2356 s).
 - Upstream model/code: `https://github.com/index-tts/index-tts.git`
 - Tag: `v2.0.0`
 - Patch: `index-tts.patch`
-- Wrapper source: `vendor_src/index-tts2-cli/`
+- Wrapper source: `wrapper/index-tts2-cli/`
 - License: bilibili Model Use License (`LICENSE.index-tts`,
   `NOTICE.index-tts.md`); not OSI open source
 - Modified paths:
@@ -46,15 +46,22 @@ the whole track by 8.707 (source 315 s → output 2356 s).
   - `indextts/utils/common.py`
   - `indextts/utils/front.py`
 
-The wrapper in `vendor_src/index-tts2-cli/` is laid over the upstream checkout;
+The wrapper in `wrapper/index-tts2-cli/` is laid over the upstream checkout;
 it provides the HTTP daemon/API used by the skill.
 
 ## Applying manually
 
+`$VENDOR` below is the install root (`<vendor 根>`). It defaults to a per-user
+data directory **outside the skill** — Windows `%LOCALAPPDATA%\video-translate\vendor`,
+Linux `$XDG_DATA_HOME/video-translate/vendor`, macOS
+`~/Library/Application Support/video-translate/vendor` — and can be overridden
+with `VTV_VENDOR_DIR` (see `references/deployment.md`).
+
 ```bash
 # pyVideoTrans
+VENDOR="${VTV_VENDOR_DIR:-$HOME/.local/share/video-translate/vendor}"
 git clone --depth 1 --branch v4.16 \
-  https://github.com/jianchang512/pyvideotrans.git vendor/pyvideotrans
+  https://github.com/jianchang512/pyvideotrans.git "$VENDOR/pyvideotrans"
 # normalize the six patched files to LF first
 git apply --whitespace=nowarn patches/pyvideotrans.patch
 ```
@@ -62,8 +69,8 @@ git apply --whitespace=nowarn patches/pyvideotrans.patch
 ```bash
 # IndexTTS2
 git clone --depth 1 --branch v2.0.0 \
-  https://github.com/index-tts/index-tts.git vendor/index-tts2-cli
-cp -a vendor_src/index-tts2-cli/. vendor/index-tts2-cli/
+  https://github.com/index-tts/index-tts.git "$VENDOR/index-tts2-cli"
+cp -a wrapper/index-tts2-cli/. "$VENDOR/index-tts2-cli/"
 # normalize the seven patched files to LF first
 git apply --whitespace=nowarn patches/index-tts.patch
 ```

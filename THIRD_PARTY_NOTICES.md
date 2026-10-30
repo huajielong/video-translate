@@ -10,7 +10,7 @@ under its own license.
 The patches and wrapper are derived works under the upstream terms:
 
 - `patches/pyvideotrans.patch` — GPL-3.0 (`patches/LICENSE.pyvideotrans`)
-- `patches/index-tts.patch` and `vendor_src/index-tts2-cli/` — bilibili Model
+- `patches/index-tts.patch` and `wrapper/index-tts2-cli/` — bilibili Model
   Use License (`patches/LICENSE.index-tts`, `patches/NOTICE.index-tts.md`)
 
 The upstream versions are pyVideoTrans `v4.16` and IndexTTS2 `v2.0.0`.
@@ -18,7 +18,7 @@ The upstream versions are pyVideoTrans `v4.16` and IndexTTS2 `v2.0.0`.
 ## pyVideoTrans
 
 - Upstream: <https://github.com/jianchang512/pyvideotrans>
-- License: **GNU GPL-3.0** (`vendor/pyvideotrans/LICENSE` in a local install)
+- License: **GNU GPL-3.0** (`<pyvideotrans_home>/LICENSE` in a local install)
 - The skill launches pyVideoTrans as a separate program. If you redistribute a
   combined package that includes pyVideoTrans, comply with GPL-3.0 and provide
   the corresponding source.
@@ -27,7 +27,7 @@ The upstream versions are pyVideoTrans `v4.16` and IndexTTS2 `v2.0.0`.
 
 - Upstream model/code: <https://github.com/index-tts/index-tts>
 - License: **bilibili Model Use License Agreement**
-  (`vendor/index-tts2-cli/LICENSE` and `LICENSE_ZH.txt` in a local install)
+  (`<index_tts2_home>/LICENSE` and `LICENSE_ZH.txt` in a local install)
 - This is not an OSI-approved open-source license. It includes restrictions for
   products with more than 100 million monthly active users or annual revenue
   above RMB 1 billion. Review the upstream agreement before commercial use.

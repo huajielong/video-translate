@@ -6,16 +6,23 @@
 
 `config.json` 由 `setup` 写入技能根目录；模板见 `config.example.json`。发到新机器前应删除它（含本机路径）。
 
+> `<vendor 根>` 是运行时（pyVideoTrans / IndexTTS2）的安装根目录，默认在技能目录**之外**：
+> Windows `%LOCALAPPDATA%\video-translate\vendor`、macOS
+> `~/Library/Application Support/video-translate/vendor`、Linux
+> `$XDG_DATA_HOME/video-translate/vendor`（或 `~/.local/share/...`）。
+> 用 `VTV_VENDOR_DIR` 或 `setup --vendor-dir DIR` 覆盖。不要装回技能目录：
+> Agent 运行时会把整个技能目录镜像复制，50GB 的模型/venv 会被整份复制。
+
 ## `config.json` 键
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `pyvideotrans_home` | `vendor/pyvideotrans` | pyVideoTrans 源码/venv 根目录；可指向外部安装 |
-| `index_tts2_home` | `vendor/index-tts2-cli` | IndexTTS2 根目录；可指向外部安装 |
+| `pyvideotrans_home` | `<vendor 根>/pyvideotrans` | pyVideoTrans 源码/venv 根目录；`setup` 写入绝对路径 |
+| `index_tts2_home` | `<vendor 根>/index-tts2-cli` | IndexTTS2 根目录；`setup` 写入绝对路径 |
 | `src_dir` | 空 | 源视频目录；可被 `--src` 覆盖 |
 | `out_dir` | 空 | 成品目录；可被 `--out` 覆盖 |
 | `work_dir` | `_work` | 中间目录；相对路径按 `out_dir` 解析 |
-| `backend` | `index` | `index` / `qwen3local` / `f5` |
+| `backend` | `index` | `index` / `qwen3local` |
 | `source_lang` | `en` | 源语言代码，见 `languages.md` |
 | `target_lang` | `zh-cn` | 目标语言代码 |
 | `subtitle_mode` | `hard` | `none` / `hard` / `soft` / `dual-hard` / `dual-soft`；默认硬字幕 |
@@ -91,7 +98,8 @@
 ## `setup` 写入的内容
 
 1. 创建 `.runtime/logs/`、`.runtime/state/`、`tools/`。
-2. 技能内 vendor 时安装依赖与模型；外部安装（`--reuse-pvt` / `--reuse-itt`）只跳过安装。
+2. 托管安装（`<vendor 根>`，默认在技能目录外）时安装依赖与模型；外部安装
+   （`--reuse-pvt` / `--reuse-itt`）只跳过安装。
 3. 写 `<pyvideotrans_home>/videotrans/params.json`：
    - `translate_type=5`（DeepSeek）
    - `deepseek_key`（来自 `--deepseek-key` 或 `DEEPSEEK_API_KEY`；已有值会保留）
@@ -110,7 +118,7 @@ Key 不在 `config.json`，而在 pyVideoTrans 的：
 <pyvideotrans_home>/videotrans/params.json
 ```
 
-默认路径：`vendor/pyvideotrans/videotrans/params.json`。
+默认路径：`<pyvideotrans_home>/videotrans/params.json`。
 
 配置方式：
 
@@ -122,7 +130,7 @@ python scripts/pipeline.py setup
 ```
 
 手动配置时复制模板 `params.example.json`，把真实 Key 只写进
-`vendor/.../params.json`（该文件已 gitignore），不要写进 `params.example.json`。
+`<pyvideotrans_home>/videotrans/params.json`（运行时目录不在仓库里），不要写进 `params.example.json`。
 `doctor` 只检查 Key 是否存在；有效性用
 `python scripts/trans_cli.py test-channel --channel deepseek` 验证。
 
@@ -158,6 +166,7 @@ python scripts/pipeline.py setup
 | `VTV_FIT_CONDENSE_SPEED` | 对应 `fit_condense_speed` |
 | `VTV_GLOSSARY_FILE` | 压缩改写时要求保留的术语表；`pipeline.py` 自动设为 `glossary` |
 | `VTV_PIN_DAEMON` | `1` 时把真 daemon 固定 P-core + High，对应 `pin_daemon` |
+| `VTV_VENDOR_DIR` | 托管安装根目录（pyVideoTrans / IndexTTS2）；默认 `%LOCALAPPDATA%\video-translate\vendor`（macOS/Linux 见 `deployment.md`）。也可用 `setup --vendor-dir DIR` |
 | `VTV_AUTO_INSTALL` | 默认 `1`；设为 `0` 时不在首次运行自动下载 vendor/models，改为手动 `setup` |
 | `VTV_ITT_PYTHON` | IndexTTS2 的 base `pythonw`（`pipeline.py` 自动设置；无控制台） |
 | `VTV_ITT_SITE` | IndexTTS2 venv 的 `Lib\site-packages`；聚类子进程靠它导入 torch/campplus |

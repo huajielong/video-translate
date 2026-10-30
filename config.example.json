@@ -1,6 +1,4 @@
 {
-  "pyvideotrans_home": "vendor/pyvideotrans",
-  "index_tts2_home": "vendor/index-tts2-cli",
   "src_dir": "",
   "out_dir": "",
   "work_dir": "_work",

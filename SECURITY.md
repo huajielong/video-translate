@@ -10,8 +10,8 @@ remote access, put them behind an authenticated reverse proxy and a firewall.
 ## Secrets
 
 - DeepSeek and other API keys are written to the local
-  `vendor/pyvideotrans/videotrans/params.json` or supplied through environment
-  variables. That file is gitignored.
+  `<pyvideotrans_home>/videotrans/params.json` (the runtime lives outside the
+  skill and the repository) or supplied through environment variables.
 - `config.json` is local machine state and is gitignored.
 - Do not paste keys into issues, logs, prompts, screenshots, or commit
   messages.

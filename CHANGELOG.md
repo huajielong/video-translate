@@ -2,6 +2,15 @@
 
 ## 2026-10-30
 
+- Install pyVideoTrans/IndexTTS2 outside the skill directory by default
+  (Windows `%LOCALAPPDATA%\video-translate\vendor`, macOS
+  `~/Library/Application Support/video-translate/vendor`, Linux
+  `$XDG_DATA_HOME/video-translate/vendor`). The agent runtime mirrors the skill
+  tree and used to copy the 50GB vendor wholesale. Override with
+  `VTV_VENDOR_DIR` or `setup --vendor-dir DIR`; existing configs keep working.
+- Rename `vendor_src/` to `wrapper/` (it is the CLI/daemon overlay source, not
+  the installed runtimes).
+
 - Fit one-line display subtitles to the real frame width (`subtitle_fit_frame`,
   `subtitle_safety`): a fixed 22-char line overflowed 960x1080/640x720/portrait
   frames because libass scales the ASS font by height/288. `dub` now derives the
@@ -24,4 +33,4 @@
 - Document the Windows windowless process model and vendor prerequisites.
 - Move vendor dependencies out of the Git repository; first use now downloads
   pyVideoTrans v4.16 and IndexTTS2 v2.0.0, applies `patches/`, and installs a
-  small IndexTTS2 CLI wrapper from `vendor_src/`.
+  small IndexTTS2 CLI wrapper from `wrapper/`.

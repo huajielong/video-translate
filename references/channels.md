@@ -45,7 +45,7 @@
 |---:|---|---:|---|---:|---|
 | 0 | edge（免费，默认） | 14 | cosyvoice | 28 | kokoro |
 | 1 | qwen3local | 15 | voxcpm | 29 | fish |
-| 2 | f5 | 16 | firered | 30 | xai |
+| 2 | — | 16 | firered | 30 | xai |
 | 3 | omnivoice | 17 | doubao | 31 | gtts |
 | 4 | confucius | 18 | bailian | 32 | azure |
 | 5 | moss | 19 | xiaomi | 33 | ai302 |

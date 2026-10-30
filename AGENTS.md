@@ -23,7 +23,8 @@ process has no console, so no cmd/conhost window flashes.
 Before the first `run`, ask the user to configure the DeepSeek key; do not ask
 them to paste it into chat. The key belongs in
 `<pyvideotrans_home>/videotrans/params.json` (default
-`vendor/pyvideotrans/videotrans/params.json`), not `config.json`.
+`<vendor root>/pyvideotrans/videotrans/params.json`; the vendor root is outside
+the skill, see `references/deployment.md`), not `config.json`.
 
 ```bash
 python scripts/pipeline.py setup --deepseek-key "sk-..."
@@ -49,11 +50,13 @@ Confirm these before starting:
 
 ## Vendor dependencies
 
-This repository does not include `vendor/`, model weights, checkpoints, API
+This repository does not include the runtimes, model weights, checkpoints, API
 keys, or local config. On first use, `setup` (or a missing `run`/`dub`/`serve`/
-`prep`) automatically clones pyVideoTrans v4.16 and IndexTTS2 v2.0.0, applies
-the project patches, and then downloads models. It needs git, network access,
-and about 20GB+ free disk.
+`prep`) automatically clones pyVideoTrans v4.16 and IndexTTS2 v2.0.0 **outside
+the skill directory** (default `%LOCALAPPDATA%\video-translate\vendor` on
+Windows; override with `VTV_VENDOR_DIR` or `--vendor-dir`), applies the project
+patches, and then downloads models. It needs git, network access, and about
+20GB+ free disk on the vendor drive.
 
 To reuse an existing vendor installation instead:
 
@@ -74,5 +77,6 @@ Set `VTV_AUTO_INSTALL=0` to disable automatic downloading. See
 - IndexTTS2 is a single worker; do not run two dubbing jobs at once.
 - Do not commit `config.json`, `params.json`, keys, media, models, venvs, or
   `.runtime/`.
-- Do not modify `vendor/` unless you are maintaining the patch set; prefer
-  `config.json` or CLI options.
+- Do not modify the installed runtimes unless you are maintaining the patch
+  set; prefer `config.json` or CLI options. Source changes belong in
+  `patches/` and `wrapper/`.

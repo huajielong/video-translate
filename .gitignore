@@ -10,7 +10,8 @@ vendor/pyvideotrans/videotrans/params.json
 vendor/pyvideotrans/videotrans/params.json*
 vendor/pyvideotrans/videotrans/cfg.json
 
-# 第三方运行时：不随仓库分发，安装时由 setup/bootstrap 获取
+# 第三方运行时：默认装在技能目录之外（见 scripts/vendor_paths.py / VTV_VENDOR_DIR）；
+# 这些规则保留给旧布局或手工装回技能目录的情况
 /vendor/
 /tools/rubberband/
 

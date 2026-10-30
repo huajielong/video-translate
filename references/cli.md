@@ -56,7 +56,7 @@ manifest 每门课给 `name`、`root`、`modules`（可选 `out`）；顶层可�
 | `--videos LIST` | prep/dub/post/run/status | `all`（默认）或逗号分隔的 stem/前缀 |
 | `--source LANG` | prep/dub/run | 源语言，如 `en` |
 | `--target LANG` | prep/dub/run | 目标语言，如 `zh-cn` |
-| `--backend NAME` | dub/run | `index`（默认）/ `qwen3local` / `f5` |
+| `--backend NAME` | dub/run | `index`（默认）/ `qwen3local` |
 | `--subtitle MODE` | dub/run | `hard`（默认）/ `none` / `soft` / `dual-hard` / `dual-soft` |
 | `--mt-workers N` | prep/run | 翻译并发，默认取 `config.json` 的 4 |
 | `--force` | prep/run | 重跑 ASR 与翻译；**不会**清逐句配音缓存 |

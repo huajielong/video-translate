@@ -78,13 +78,15 @@ VERSION = "1.3.0"
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 from _winhide import ensure_stdio, hide_console_windows  # noqa: E402
+from vendor_paths import vendor_root  # noqa: E402
 
 hide_console_windows()
 
 SKILL_DIR = SCRIPT_DIR.parent
 
 ensure_stdio(SKILL_DIR / ".runtime" / "logs" / "trans_cli.log")
-BUNDLED_HOME = SKILL_DIR / "vendor" / "pyvideotrans"
+# The runtime is installed outside the skill tree by default; see vendor_paths.py.
+BUNDLED_HOME = vendor_root() / "pyvideotrans"
 
 # Provisioned tools and download cache (cache-first: never re-download what is here).
 TOOLS_DIR = SKILL_DIR / "tools"
@@ -175,7 +177,7 @@ CHANNEL_CONFIG = {
 }
 
 TTS_CHANNELS = {
-    "edge": 0, "qwen3local": 1, "f5": 2, "omnivoice": 3, "confucius": 4,
+    "edge": 0, "qwen3local": 1, "omnivoice": 3, "confucius": 4,
     "moss": 5, "zipvoice": 6, "piper": 7, "chatterbox": 8, "supertonic": 9,
     "vitscn": 10, "higgs": 11, "index": 12, "gptsovits": 13, "cosyvoice": 14,
     "voxcpm": 15, "firered": 16, "doubao": 17, "bailian": 18, "xiaomi": 19,
@@ -1481,9 +1483,12 @@ def cmd_setup(args) -> int:
     else:
         log("WARNING: ffmpeg not found and downloads are disabled")
 
-    # 4) use the vendored source shipped with the skill; copy only when it is
-    #    missing or the user explicitly passes --copy-from.
-    runtime = BUNDLED_HOME
+    # 4) use the installed runtime; copy only when it is missing or the user
+    #    explicitly passes --copy-from.  --home / PYVIDEOTRANS_HOME win so
+    #    `pipeline.py setup --vendor-dir DIR` provisions exactly that root.
+    explicit = (getattr(args, "home", None)
+                or os.environ.get("PYVIDEOTRANS_HOME", ""))
+    runtime = Path(explicit).expanduser().resolve() if explicit else BUNDLED_HOME
     source = None
     if args.copy_from:
         source = Path(args.copy_from).expanduser().resolve()

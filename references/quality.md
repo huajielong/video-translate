@@ -25,7 +25,7 @@
 ## 翻译
 
 - 术语表：`assets/glossary.txt`，格式 `原文=译文`；`setup`/`pipeline` 会注入。
-- 语言 prompt：`vendor/pyvideotrans/videotrans/prompts/language_prompts/<lang>.txt`。
+- 语言 prompt：`<pyvideotrans_home>/videotrans/prompts/language_prompts/<lang>.txt`。
 - SRT prompt 已要求 1:1 块保持、按每秒 3–4 字压缩、禁止跨块搬词。
 - `aitrans_context=true` 注入全片上下文提升术语一致性；超长视频会增加 token。
 - 翻译缓存键包含文本/渠道/模型；本项目已补上 glossary/prompt/context 哈希（见补丁）。改术语表后旧缓存仍可能命中，必要时清 `tmp/translate_cache`。
@@ -71,5 +71,5 @@
 
 ## 后端选择
 
-默认 IndexTTS2（质量优先，beam 3 / 扩散 25）；`qwen3local` / `f5` 是可选后端，
+默认 IndexTTS2（质量优先，beam 3 / 扩散 25）；`qwen3local` 是可选后端，
 本机实测更慢，换后端前先按 `audio-fit.md` 重新标定并试听。

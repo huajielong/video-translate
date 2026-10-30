@@ -144,7 +144,7 @@ speaker clustering failed rc=1
 `VTV_FIT_CONDENSE_SPEED`、`VTV_GLOSSARY_FILE`、
 `VTV_ITT_SITE`（聚类用的 IndexTTS2 `site-packages`）。
 
-实现位置：`vendor/pyvideotrans/videotrans/task/_stage_dubbing.py` 的
+实现位置：`<pyvideotrans_home>/videotrans/task/_stage_dubbing.py` 的
 `_cluster_refs`、`_fit_merge_queue`、`_fit_condense_queue`、`_fit_cached_ms`、
 `_fit_glossary_terms`。
 

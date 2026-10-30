@@ -29,12 +29,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _winhide import ensure_stdio, hide_console_windows  # noqa: E402
 from display_fit import display_limit  # noqa: E402
+from vendor_paths import vendor_root  # noqa: E402
 
 hide_console_windows()
 
 SKILL = Path(__file__).resolve().parent.parent
 SCRIPTS = SKILL / "scripts"
-VENDOR = SKILL / "vendor"
+# Installed runtimes live outside the skill tree: the agent runtime mirrors the
+# skill directory and would copy the whole 50GB vendor every few hours.
+VENDOR = vendor_root()
 PVT_DEFAULT = VENDOR / "pyvideotrans"
 ITT_DEFAULT = VENDOR / "index-tts2-cli"
 TOOLS = SKILL / "tools"
@@ -55,8 +58,8 @@ IS_WINDOWS = platform.system().lower() == "windows"
 ensure_stdio(LOGS / "entry.log")
 
 DEFAULTS = {
-    "pyvideotrans_home": "vendor/pyvideotrans",
-    "index_tts2_home": "vendor/index-tts2-cli",
+    "pyvideotrans_home": str(PVT_DEFAULT),
+    "index_tts2_home": str(ITT_DEFAULT),
     "src_dir": "",
     "out_dir": "",
     "work_dir": "_work",
@@ -294,19 +297,55 @@ def wait_healthy(url: str, seconds: int = 60) -> bool:
 # --------------------------------------------------------------------------
 # setup / doctor / serve
 # --------------------------------------------------------------------------
+def resolve_setup_paths(args, cfg: dict) -> tuple[Path, Path, Path, Path, Path]:
+    """Pick (vendor root, pvt, itt, managed pvt, managed itt) for setup.
+
+    --vendor-dir (or VTV_VENDOR_DIR) selects the managed install root, outside
+    the skill by default.  --reuse-* points at a user-managed copy and never
+    downloads anything; a config path outside the managed root is treated as
+    user-managed too.
+    """
+    root = vendor_root(getattr(args, "vendor_dir", "") or None)
+    managed_pvt = (root / "pyvideotrans").resolve()
+    managed_itt = (root / "index-tts2-cli").resolve()
+    if args.reuse_pvt:
+        pvt = resolve(args.reuse_pvt)
+    elif getattr(args, "vendor_dir", ""):
+        pvt = managed_pvt
+    else:
+        pvt = resolve(cfg["pyvideotrans_home"])
+    if args.reuse_itt:
+        itt = resolve(args.reuse_itt)
+    elif getattr(args, "vendor_dir", ""):
+        itt = managed_itt
+    else:
+        itt = resolve(cfg["index_tts2_home"])
+    return root, pvt, itt, managed_pvt, managed_itt
+
+
 def cmd_setup(args, cfg: dict) -> int:
-    pvt = resolve(args.reuse_pvt or cfg["pyvideotrans_home"])
-    itt = resolve(args.reuse_itt or cfg["index_tts2_home"])
+    root, pvt, itt, managed_pvt, managed_itt = resolve_setup_paths(args, cfg)
+    print(f"[setup] vendor root: {root}"
+          + ("" if str(root) != str(VENDOR) else " (default, outside the skill)"))
     cfg["pyvideotrans_home"] = str(pvt)
     cfg["index_tts2_home"] = str(itt)
+    # Old configs may still point inside the skill; the agent runtime mirrors
+    # the whole skill tree, so warn instead of silently copying 50GB again.
+    inside = [p for p in (pvt, itt) if p.is_relative_to(SKILL)]
+    if inside:
+        print("[setup] WARNING: runtime is inside the skill directory: "
+              f"{inside[0]}")
+        print("        Move it outside (VTV_VENDOR_DIR / --vendor-dir); see "
+              "references/deployment.md.")
     for d in (LOGS, STATE, TOOLS):
         d.mkdir(parents=True, exist_ok=True)
 
     try:
         from bootstrap_vendor import ensure_vendor
         ensure_vendor(
-            install_pvt=(pvt == PVT_DEFAULT.resolve()),
-            install_itt=(itt == ITT_DEFAULT.resolve()),
+            install_pvt=(pvt == managed_pvt),
+            install_itt=(itt == managed_itt),
+            vendor=root,
         )
     except Exception as exc:
         print(f"[setup] vendor bootstrap failed: {exc}")
@@ -318,14 +357,16 @@ def cmd_setup(args, cfg: dict) -> int:
     if not (pvt / "cli.py").exists() or not (itt / "scripts" / "indextts2.py").exists():
         print("[setup] vendor is missing. This repository does not bundle pyVideoTrans "
               "or index-tts2-cli.")
-        print("        Put them under vendor/, or rerun:")
+        print(f"        Managed install root: {root}")
+        print("        Rerun with --reuse-pvt/--reuse-itt for an existing install:")
         print("          python scripts/pipeline.py setup "
               "--reuse-pvt /path/to/pyvideotrans --reuse-itt /path/to/index-tts2-cli")
         return 2
 
     print(f"[setup] pyVideoTrans home: {pvt}")
-    if pvt == PVT_DEFAULT.resolve():
-        cmd = [sys.executable, str(WRAPPER), "setup", "--models", cfg["asr_model"]]
+    if pvt == managed_pvt:
+        cmd = [sys.executable, str(WRAPPER), "setup", "--home", str(pvt),
+               "--models", cfg["asr_model"]]
         if args.proxy:
             cmd += ["--proxy", args.proxy]
         rc = run(cmd, cfg, LOGS / "setup_pyvideotrans.log")
@@ -336,7 +377,7 @@ def cmd_setup(args, cfg: dict) -> int:
         print("[setup] external pyVideoTrans: skip dependency install")
 
     print(f"[setup] IndexTTS2 home: {itt}")
-    if itt == ITT_DEFAULT.resolve():
+    if itt == managed_itt:
         rc = run([sys.executable, str(itt / "scripts" / "indextts2.py"), "setup"],
                  cfg, LOGS / "setup_indextts2.log")
         if rc != 0:
@@ -414,6 +455,11 @@ def cmd_doctor(_args, cfg: dict) -> int:
     add("Index API :8791", healthy(cfg["index_api"] + "/health"), cfg["index_api"])
     add("Gradio shim :7861", healthy(cfg["index_url"] + "/"), cfg["index_url"])
     add("glossary", Path(cfg["glossary"]).exists(), cfg["glossary"])
+    inside = [p for p in (pvt, itt) if p.is_relative_to(SKILL)]
+    if inside:
+        print(f"[WARN] runtime inside skill dir: {inside[0]}")
+        print("       The agent runtime mirrors the skill tree; move it outside "
+              "(VTV_VENDOR_DIR / --vendor-dir), see references/deployment.md.")
 
     critical = [ok for name, ok, _ in checks
                 if name in ("pyVideoTrans source", "pyVideoTrans venv",
@@ -473,7 +519,8 @@ def auto_setup(cfg: dict) -> bool:
         return False
     print("[auto] vendor missing; running first-use setup "
           "(downloads dependencies and model weights) ...")
-    args = argparse.Namespace(reuse_pvt="", reuse_itt="", deepseek_key="", proxy="")
+    args = argparse.Namespace(reuse_pvt="", reuse_itt="", deepseek_key="",
+                              proxy="", vendor_dir="")
     try:
         return cmd_setup(args, cfg) == 0
     except Exception as exc:
@@ -1193,6 +1240,9 @@ def main() -> int:
     p = sub.add_parser("setup", help="install dependencies/models and write config")
     p.add_argument("--reuse-pvt", help="use an existing pyVideoTrans checkout")
     p.add_argument("--reuse-itt", help="use an existing IndexTTS2 checkout")
+    p.add_argument("--vendor-dir", default="",
+                   help="managed install root (default: per-user data dir, "
+                        "outside the skill; also VTV_VENDOR_DIR)")
     p.add_argument("--deepseek-key", default="")
     p.add_argument("--proxy", default="")
     p.set_defaults(func=cmd_setup)
@@ -1212,7 +1262,7 @@ def main() -> int:
         p.add_argument("--videos", default="all")
         p.add_argument("--source", dest="source_lang", default="")
         p.add_argument("--target", dest="target_lang", default="")
-        p.add_argument("--backend", default="", choices=["", "index", "qwen3local", "f5"])
+        p.add_argument("--backend", default="", choices=["", "index", "qwen3local"])
         p.add_argument("--subtitle", dest="subtitle_mode", default="",
                        choices=["", "none", "hard", "soft", "dual-hard", "dual-soft"])
         p.add_argument("--force", action="store_true")

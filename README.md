@@ -36,19 +36,22 @@
 为了保持仓库干净并尊重第三方许可证，本仓库**不包含**：
 
 ```text
-vendor/pyvideotrans
-vendor/index-tts2-cli
+<vendor 根>/pyvideotrans      # 默认 %LOCALAPPDATA%\video-translate\vendor
+<vendor 根>/index-tts2-cli
 tools/rubberband
 模型权重、checkpoints、venv
 config.json / params.json / 任何 API Key
 课程视频、字幕、输出目录
 ```
 
+运行时默认装在**技能目录之外**（Agent 会把整个技能目录镜像复制）；换盘用
+`VTV_VENDOR_DIR` 或 `setup --vendor-dir DIR`。
+
 但**首次使用会自动下载并安装**：
 
 1. `setup`（以及缺失时的 `run` / `dub` / `serve` / `prep`）会：
    - clone **pyVideoTrans v4.16**，应用 `patches/pyvideotrans.patch`；
-   - clone **IndexTTS2 v2.0.0**，叠加 `vendor_src/index-tts2-cli/` 的 CLI wrapper，
+   - clone **IndexTTS2 v2.0.0**，叠加 `wrapper/index-tts2-cli/` 的 CLI wrapper，
      应用 `patches/index-tts.patch`；
    - 调用现有 `setup` 创建 venv、下载 Whisper / IndexTTS2 模型和 checkpoints。
 2. 需要本机有 **git**、网络和约 **20GB+** 空闲磁盘。
@@ -159,7 +162,7 @@ Key **不存在** `config.json`，而是写到 pyVideoTrans 的
 默认安装即：
 
 ```text
-vendor/pyvideotrans/videotrans/params.json
+<vendor 根>/pyvideotrans/videotrans/params.json
 ```
 
 三种配置方式：
@@ -173,7 +176,7 @@ export DEEPSEEK_API_KEY="sk-..."       # Windows PowerShell: $env:DEEPSEEK_API_K
 python scripts/pipeline.py setup
 
 # 3) 手动编辑 params.json
-cp params.example.json vendor/pyvideotrans/videotrans/params.json
+cp params.example.json <pyvideotrans_home>/videotrans/params.json
 # 然后把 deepseek_key 改成真实 Key
 ```
 

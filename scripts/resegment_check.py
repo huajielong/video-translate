@@ -37,8 +37,23 @@ from resegment_srt import (  # noqa: E402
 )
 
 SKILL = Path(__file__).resolve().parent.parent
-PARAMS = SKILL / "vendor" / "pyvideotrans" / "videotrans" / "params.json"
 CACHE = SKILL / ".runtime" / "resegment_cache"
+
+
+def params_path() -> Path | None:
+    """Locate pyVideoTrans params.json.
+
+    The runtime lives outside the skill (see vendor_paths.py); pipeline.py
+    passes PYVIDEOTRANS_HOME, and a manual run falls back to config.json.
+    """
+    home = os.environ.get("PYVIDEOTRANS_HOME", "").strip()
+    if not home:
+        try:
+            cfg = json.loads((SKILL / "config.json").read_text(encoding="utf-8"))
+            home = str(cfg.get("pyvideotrans_home") or "")
+        except Exception:
+            home = ""
+    return (Path(home).expanduser() / "videotrans" / "params.json") if home else None
 MODEL_DEFAULT = "deepseek-flash"
 BASE_DEFAULT = "https://api.deepseek.com/v1"
 TERM = re.compile(r"[A-Za-z0-9][A-Za-z0-9_+.\-/]*")
@@ -48,12 +63,14 @@ def load_credentials() -> tuple[str, str, str]:
     key = os.environ.get("DEEPSEEK_API_KEY", "")
     model = os.environ.get("VTV_RESEGMENT_MODEL", "")
     base = os.environ.get("DEEPSEEK_BASE_URL", "")
-    try:
-        params = json.loads(PARAMS.read_text(encoding="utf-8"))
+    path = params_path()
+    if path is not None:
+        try:
+            params = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            params = {}
         key = key or params.get("deepseek_key", "")
         model = model or params.get("deepseek_model", "")
-    except Exception:
-        pass
     return key, model or MODEL_DEFAULT, (base or BASE_DEFAULT).rstrip("/")
 
 

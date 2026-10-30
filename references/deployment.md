@@ -38,20 +38,32 @@ traceback 写到 `.runtime/logs/entry.log` / `trans_cli.log`。
 本仓库采用 **首次使用自动下载**：GitHub 仓库只包含技能代码、文档、术语表、
 补丁和 IndexTTS2 CLI wrapper，不包含：
 
-- `vendor/pyvideotrans`（GPL-3.0，体积大且需按 GPL 分发源码）
-- `vendor/index-tts2-cli`（bilibili 模型使用许可，不是 OSI 开源）
+- `<vendor 根>/pyvideotrans`（GPL-3.0，体积大且需按 GPL 分发源码）
+- `<vendor 根>/index-tts2-cli`（bilibili 模型使用许可，不是 OSI 开源）
 - `tools/rubberband`（GPL 可执行文件）
 - 模型权重、checkpoints、venv、`config.json`、`.runtime/`、课程媒体
 - 任何 `*_key` / `params.json` 中的密钥
 
+`<vendor 根>` **默认在技能目录之外**（Agent 运行时会把整个技能目录镜像复制，
+放在里面会被整份复制并撑爆磁盘）：
+
+| 平台 | 默认 `<vendor 根>` |
+|---|---|
+| Windows | `%LOCALAPPDATA%\video-translate\vendor` |
+| macOS | `~/Library/Application Support/video-translate/vendor` |
+| Linux | `$XDG_DATA_HOME/video-translate/vendor`（默认 `~/.local/share/video-translate/vendor`） |
+
+用 `VTV_VENDOR_DIR` 或 `setup --vendor-dir DIR` 覆盖（例如模型放 D 盘：
+`VTV_VENDOR_DIR=D:/vt_vendor`）。同一用户下的多份技能副本共用这一个根目录。
+
 首次 `setup`（或缺失 vendor 时的 `run` / `dub` / `serve` / `prep`）会自动：
 
 1. clone pyVideoTrans `v4.16`，应用 `patches/pyvideotrans.patch`；
-2. clone IndexTTS2 `v2.0.0`，叠加 `vendor_src/index-tts2-cli/`，应用
+2. clone IndexTTS2 `v2.0.0`，叠加 `wrapper/index-tts2-cli/`，应用
    `patches/index-tts.patch`；
 3. 创建 venv、下载 Whisper / IndexTTS2 模型和 checkpoints。
 
-需要本机有 git、网络和约 20GB+ 空闲磁盘。已有安装可复用：
+需要本机有 git、网络和约 20GB+ 空闲磁盘（`<vendor 根>` 所在分区）。已有安装可复用：
 
 ```bash
 python scripts/pipeline.py setup \
@@ -59,7 +71,7 @@ python scripts/pipeline.py setup \
   --reuse-itt /path/to/index-tts2-cli
 ```
 
-不想自动下载时设 `VTV_AUTO_INSTALL=0`。`vendor/` 已在 `.gitignore` 中；
+不想自动下载时设 `VTV_AUTO_INSTALL=0`。不要再把运行时装回技能目录；
 不要为了省事把整个本地技能目录（含 venv/models）打成 zip 上传。上游依赖的
 许可证和商用限制见根目录 `THIRD_PARTY_NOTICES.md` 与 `patches/README.md`。
 
@@ -76,7 +88,7 @@ python scripts/pipeline.py setup \
 ## 网络
 
 - PyPI：`setup` 默认清华镜像；代理可用 `--proxy http://127.0.0.1:2080` 或 `HTTPS_PROXY`。
-- 模型：IndexTTS2/Whisper 优先 ModelScope，失败回落 HF 镜像；见 `vendor/index-tts2-cli/references/deployment.md`。
+- 模型：IndexTTS2/Whisper 优先 ModelScope，失败回落 HF 镜像；见 `<index_tts2_home>/references/deployment.md`。
 - 国内直连 Hugging Face 常失败；准备代理或镜像。
 
 ## 端口与安全
@@ -94,7 +106,7 @@ python scripts/pipeline.py setup \
 
 ## 更新
 
-- 替换 `vendor/pyvideotrans` 或 `vendor/index-tts2-cli` 后，重新跑 `setup`（依赖/模型已缓存则秒回）。
+- 替换 `<pyvideotrans_home>` 或 `<index_tts2_home>` 后，重新跑 `setup`（依赖/模型已缓存则秒回）。
 - 本项目对 vendor 的补丁见 `references/quality.md`、`references/pipeline.md`、
   `references/audio-fit.md`；升级上游后需重新应用：
   - `_rate.py` concat 强制 48k/2ch；空档 ≤natural 时保持 TTS 原速（不再把
@@ -140,23 +152,34 @@ python scripts/pipeline.py setup \
   - `index-tts2-cli/scripts/itts/srv.py` daemon 启动自绑定（High + `0xFFFF`）
 
 > `pipeline.py serve --stop` 只停 API 和 shim；daemon 通常随后 idle 退出。若仍占用显存，
-> 执行 `vendor/index-tts2-cli/venv/Scripts/python.exe vendor/index-tts2-cli/scripts/indextts2.py stop --force`。
+> 执行 `<index_tts2_home>/venv/Scripts/python.exe <index_tts2_home>/scripts/indextts2.py stop --force`。
 > 在 Agent 场景优先用 `pipeline.py serve --stop`，避免这条命令的控制台窗口。
 
-## vendor 放在技能目录外（避免被技能镜像整份复制）
+## vendor 默认在技能目录外（避免被技能镜像整份复制）
 
 部分 Agent 运行时会周期性地把 `.claude/skills/<name>/` 整目录镜像到项目根目录的
-`.agents/skills/<name>/`。如果 `vendor/`（模型、venv、checkpoints、配音缓存，通常
+`.agents/skills/<name>/`。如果运行时（模型、venv、checkpoints、配音缓存，通常
 50GB+）还在技能目录内，镜像会把它整份复制，几分钟到几小时内写满磁盘，并让正在运行
 的批次报 `OSError: [Errno 28] No space left on device`。
 
-处理：
+现在 `setup` 默认装到用户数据目录（见上文 `<vendor 根>` 表）；需要换盘时用
+`VTV_VENDOR_DIR` 或 `--vendor-dir`：
 
-```text
-把 vendor/ 移到技能目录外，例如 D:/AgentV2V/_vt_vendor/
-把 config.json 的 pyvideotrans_home / index-tts2_home 改为该绝对路径
-python scripts/pipeline.py doctor     # 应显示新路径
+```bash
+# Windows 示例：模型放 D 盘
+set VTV_VENDOR_DIR=D:/vt_vendor
+python scripts/pipeline.py setup
+# 或在首次 setup 时指定
+python scripts/pipeline.py setup --vendor-dir D:/vt_vendor
 ```
 
-`vendor/` 本就不随仓库分发，移动不影响 Git；`.agents/` 可直接删除。移动后若镜像
+旧安装（运行时还在技能目录内）的迁移步骤：
+
+```text
+把 <skill>/vendor/pyvideotrans 和 <skill>/vendor/index-tts2-cli 移到技能目录外
+python scripts/pipeline.py setup --vendor-dir <新根>   # 或手工改 config.json 的两个路径
+python scripts/pipeline.py doctor       # 应显示新路径
+```
+
+运行时目录本就不随仓库分发，移动不影响 Git；`.agents/` 可直接删除。移动后若镜像
 再次生成，也只复制脚本与文档（几百 MB），不会再出现磁盘写满。

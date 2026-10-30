@@ -5,7 +5,7 @@
 ## `setup` 失败 / 初始化不成功
 
 **`vendored pyVideoTrans source is missing`**
-技能内 `vendor/pyvideotrans` 缺少 `cli.py`。重新安装技能目录，或用 `--copy-from <dir>` 指向一个包含 `cli.py` 的 pyVideoTrans 目录。
+`<pyvideotrans_home>` 缺少 `cli.py`。重新运行 `setup`，或用 `--reuse-pvt <dir>` 指向一个包含 `cli.py` 的 pyVideoTrans 目录。
 
 **`uv sync` 下载失败 / 卡住**
 - 确认 `uv` 在 PATH（或设置 `UV_BIN`）。
@@ -74,7 +74,7 @@ Windows 中文控制台默认 GBK。包装脚本已为子进程设置 `PYTHONUTF
 ## 模型下载慢 / 卡住
 
 - `setup --models <name>` 优先**直连 hf-mirror**；失败后自动回退到 `huggingface.co` + 代理。
-- 先查缓存：技能内 `vendor\pyvideotrans\models\` 与外部安装的 `models\` 都会命中，命中则直接复制，不联网。
+- 先查缓存：托管安装的 `<pyvideotrans_home>\models\` 与外部安装的 `models\` 都会命中，命中则直接复制，不联网。
 - 运行任务时，应用自身优先 ModelScope（faster-whisper 系列），其他模型走 `huggingface.co`，不通时回落 `hf-mirror.com`。
 - 可显式指定：`set HF_ENDPOINT=https://hf-mirror.com`
 - 若配置了本地代理，应用会自动读取（例如 `http://127.0.0.1:2080`）；`NO_PROXY` 已包含 `127.0.0.1` / `localhost`，本地服务不会被代理。
@@ -153,7 +153,11 @@ LLM 渠道可能返回不符合 SRT 格式的内容。处理顺序：
 `--torch auto` 会选 CPU 轮子；也可显式 `--torch cpu` 省下约 3 GB 下载。
 
 **路径与启动器**
-所有路径统一用 `pathlib` 并相对技能目录解析。默认回退安装路径：各平台统一为 `~/pyvideotrans`（仅当技能内 `vendor/pyvideotrans` 不存在时使用）。启动器：仓库根目录的 `trans.cmd`（Windows）与 `./trans`（macOS/Linux）；只安装技能目录时直接调用 `<skill_dir>/scripts/trans_cli.py`。
+所有路径统一用 `pathlib` 解析；`config.json` 里写绝对路径，相对路径按技能根目录解析。
+运行时（pyVideoTrans / IndexTTS2）默认装在技能目录**之外**的 `<vendor 根>`
+（Windows `%LOCALAPPDATA%\video-translate\vendor`，其余平台见 `deployment.md`），
+用 `VTV_VENDOR_DIR` 或 `setup --vendor-dir DIR` 覆盖。Windows 无控制台入口是
+`scripts/pipeline.pyw`；单步排查可直接调用 `scripts/trans_cli.py`。
 
 ## 不要跑上游的 pytest
 
