@@ -142,3 +142,21 @@ python scripts/pipeline.py setup \
 > `pipeline.py serve --stop` 只停 API 和 shim；daemon 通常随后 idle 退出。若仍占用显存，
 > 执行 `vendor/index-tts2-cli/venv/Scripts/python.exe vendor/index-tts2-cli/scripts/indextts2.py stop --force`。
 > 在 Agent 场景优先用 `pipeline.py serve --stop`，避免这条命令的控制台窗口。
+
+## vendor 放在技能目录外（避免被技能镜像整份复制）
+
+部分 Agent 运行时会周期性地把 `.claude/skills/<name>/` 整目录镜像到项目根目录的
+`.agents/skills/<name>/`。如果 `vendor/`（模型、venv、checkpoints、配音缓存，通常
+50GB+）还在技能目录内，镜像会把它整份复制，几分钟到几小时内写满磁盘，并让正在运行
+的批次报 `OSError: [Errno 28] No space left on device`。
+
+处理：
+
+```text
+把 vendor/ 移到技能目录外，例如 D:/AgentV2V/_vt_vendor/
+把 config.json 的 pyvideotrans_home / index-tts2_home 改为该绝对路径
+python scripts/pipeline.py doctor     # 应显示新路径
+```
+
+`vendor/` 本就不随仓库分发，移动不影响 Git；`.agents/` 可直接删除。移动后若镜像
+再次生成，也只复制脚本与文档（几百 MB），不会再出现磁盘写满。

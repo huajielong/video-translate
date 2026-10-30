@@ -41,6 +41,8 @@ manifest 每门课给 `name`、`root`、`modules`（可选 `out`）；顶层可�
 `<state_dir>/qc`），并写 `batch_status.json`、`batch_summary.md`。中断后重跑
 同一 `run` 命令即可：已完成且 QC 通过的视频会跳过。重复 stem（如多门课都有
 `001_Introduction`）靠课程归档区分，历史批次续跑时把 `qc_dir` 指到原归档目录。
+归档是**合并写入**（保留已有文件），重跑/续跑不会清空先前归档的 QC；否则共享的
+`.runtime/logs/<stem>.qc.json` 已被其他课程的同名视频覆盖，会导致归档缺项。
 
 ## 共享参数
 

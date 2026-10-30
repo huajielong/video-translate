@@ -205,8 +205,11 @@ def write_status(state_dir: Path, items: list[dict]) -> None:
 
 
 def copy_course_qc(course: dict, qc_root: Path) -> Path:
+    # Keep entries already archived for this course: the shared
+    # .runtime/logs/<stem>.qc.json is overwritten when another course reuses
+    # the same stem (001_Introduction, 006_Conclusion...), so a resume or a
+    # re-run must not wipe QC that was archived in an earlier pass.
     dest = qc_root / f"{course['index']:02d}_{course['name']}"
-    shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True, exist_ok=True)
     out = Path(course["out"])
     for _, stem in course_stems(course):

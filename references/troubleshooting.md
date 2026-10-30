@@ -252,3 +252,21 @@ Windows 请把 `rubberband.exe` 放到 PATH 或 `tools/rubberband/`，Linux
 ## 更多
 
 pyVideoTrans 包装脚本的问题见 `references/troubleshooting-pyvideotrans.md`。
+
+## 磁盘写满（Errno 28），批次中断
+
+现象：写 QC 归档或输出时报 `OSError: [Errno 28] No space left on device`，批次以
+退出码 1 结束，但成品可能已经生成。
+
+排查顺序：
+
+- `df -h /d` 确认剩余空间；0 字节时先找增长最快的目录。
+- 常见元凶：Agent 运行时把 `.claude/skills/<name>/` 镜像到 `.agents/skills/`，
+  若 `vendor/`（模型/venv/配音缓存，50GB+）仍在技能目录内会被整份复制。处理见
+  `deployment.md` 的“vendor 放在技能目录外”。
+- `vendor/pyvideotrans/tmp/<pid>/` 是崩溃残留的任务临时目录，可删数字目录，保留
+  `dubbing_cache` / `translate_cache`。
+- 清理后重跑 `batch_courses.py run`：成品与归档 QC 齐全的课会跳过。若归档仍缺项，
+  用 `pipeline.py qc --video ... --source-video ... --zh ... --en ... --json-out
+  <qc_dir>/<编号>_<课程名>/<stem>.qc.json` 补齐。同名 stem（多门课都有
+  `001_Introduction`）会互相覆盖 `.runtime/logs/<stem>.qc.json`，归档是唯一可信来源。
