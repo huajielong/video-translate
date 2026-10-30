@@ -40,6 +40,8 @@
   "resegment_target_max_chars": 44,
   "resegment_llm_check": true,
   "subtitle_max_chars": 22,
+  "subtitle_fit_frame": true,
+  "subtitle_safety": 0.95,
   "fit_merge": true,
   "fit_condense": true,
   "fit_force": false,

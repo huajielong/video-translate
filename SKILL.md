@@ -40,7 +40,7 @@ python scripts/pipeline.py setup --deepseek-key "sk-..."
 | `source_lang` / `target_lang` | `en` / `zh-cn` | 换课程语言时确认 |
 | `backend` | `index` | 需要其他 TTS 后端时确认 |
 | `subtitle_mode` | `hard` | 问用户要硬字幕还是 `soft` |
-| `subtitle_max_chars` | `22` | 非中文目标改用 `other_len=60` |
+| `subtitle_max_chars` | `22` | 非中文目标改用 `other_len=60`；窄画幅/竖屏由 `subtitle_fit_frame=true` 自动收紧，不要手动改小 |
 | `voice_autorate` / `video_autorate` | `false` / `true` | 默认声音优先，不要改成音频拉伸 |
 | `max_video_speedup_rate` | `1.25` | 想保留更多停顿就调小 |
 | `max_phrase_pause_ms` | `300` | 句间空白仍长/太紧时调整 |
@@ -97,8 +97,9 @@ Windows 后台/Agent 运行用 `pythonw scripts/pipeline.pyw <command>`：解释
    `max_video_speedup_rate`（1.25×）到“音频 + `max_phrase_pause_ms`（300ms）”。
 4. 每个 TTS 单元边缘精确裁到首/末非静音，20ms 淡入淡出，前后各加 80ms 纯静音预滚，
    避免句间“嗖”声。
-5. 显示字幕默认硬字幕、**每条一行**（CJK 上限 `subtitle_max_chars=22`）；软字幕用
-   `--subtitle soft`，硬/软二选一。非中文目标用 `other_len=60`，不要套用 22 字。
+5. 显示字幕默认硬字幕、**每条一行**（CJK 上限 `subtitle_max_chars=22`，并按帧宽
+   自动收紧：960x1080/640x720 约 14 字、竖屏约 8 字，见 `subtitle_fit_frame`）；
+   软字幕用 `--subtitle soft`，硬/软二选一。非中文目标用 `other_len=60`，不要套用 22 字。
 6. `post` 统一 loudnorm；QC 按 `max_video_speedup_rate` / `max_video_pts_rate` 计算
    时长上下界，`duration_tol_s`（默认 15s）只是绝对下限，容忍视频变速造成的漂移。
 7. 交付前看 `<out>/QC_SUMMARY.md`：QC PASS、每条一行、字幕与音画同步、句间空白约 300ms。
@@ -144,7 +145,7 @@ IndexTTS2 服务本身的 API/音色/情感文档在 `vendor/index-tts2-cli/refe
 
 ## 默认值
 
-`index` 克隆后端、硬字幕（每条显示一行，22 字上限）、`en → zh-cn`、`mt_workers=4`、
+`index` 克隆后端、硬字幕（每条显示一行，22 字上限并按帧宽收紧）、`en → zh-cn`、`mt_workers=4`、
 AAC 48 kHz、-18 LUFS、术语表 `assets/glossary.txt`。软字幕用 `--subtitle soft`。
 语言不写死：`--source` / `--target` / `--glossary` 均可配置。
 视频旁有 `.en-us.vtt` / `.en.vtt` / `.en.srt` 时直接导入，跳过 ASR（`sidecar_subs=true`）。

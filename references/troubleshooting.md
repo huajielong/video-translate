@@ -81,6 +81,26 @@ GPU 已锁频且 CPU 稳定但 GPT 仍随句数上升时，才考虑 `index_rest
   检查 DeepSeek Key/网络，或临时设 `resegment_llm_check=false`；
 - 显示字幕仍按短块烧录，TTS 使用合并后的完整句；两者块数不同是正常的。
 
+## 字幕超出画面左右边缘（窄画幅 / 竖屏）
+
+现象：成品里一行字幕左右被裁掉（首尾各缺半个字），画面比例不是 16:9 时最常见
+（960x1080、640x720、竖屏 1080x1920）。
+
+原因：ffmpeg 把 SRT 转成 ASS 时固定 `PlayRes 384x288`、字号 16、左右边距 10，
+libass 按 `帧高/288` 放大字号；一行能放多少字取决于 **帧宽/帧高**，固定 22 字在
+`宽/高 < 4:3` 时必然溢出。
+
+处理：
+
+- 保持 `subtitle_fit_frame=true`（默认）：`dub` 用 ffprobe 取源视频帧宽高，
+  按 `scripts/display_fit.py` 算出该帧的字数上限（960x1080/640x720 ≈14、
+  1080x1920 ≈8、16:9 仍是 22），作为 `VTV_CJK_LEN` 交给 `_display_items` 切条；
+  日志会打印 `frame 960x1080 -> subtitle limit 14 chars`。
+- QC 用同一公式核对，超宽行会报
+  `N subtitle lines exceed X chars (frame width)`；历史批次可用同一条命令重跑 QC。
+- 画面仍贴边（字形/描边压边）时把 `subtitle_safety` 从 0.95 调到 0.9。
+- 关掉该功能（`subtitle_fit_frame=false`）只适合确认是 16:9 的片源。
+
 ## 字幕与音画不同步
 
 现象：配音和画面同步，但字幕整体提前/滞后，或某段后越差越多。

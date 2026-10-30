@@ -28,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _winhide import ensure_stdio, hide_console_windows  # noqa: E402
+from display_fit import display_limit  # noqa: E402
 
 hide_console_windows()
 
@@ -98,8 +99,14 @@ DEFAULTS = {
     # DeepSeek audits the rule-based sentence boundaries; it only proposes
     # TTS groups, while display cues stay at the rule-based boundaries.
     "resegment_llm_check": True,
-    # 一条显示字幕的宽度（CJK 字数）；过长会拆成多条一行字幕
+    # 一条显示字幕的宽度（CJK 字数）；过长会拆成多条一行字幕。
+    # 竖屏/窄画幅的字幕会被 frame 宽度收紧：见 subtitle_fit_frame。
     "subtitle_max_chars": 22,
+    # 按视频帧宽动态收紧 subtitle_max_chars（960x1080 约 14 字，640x720 约 14 字），
+    # 否则一行 22 字会超出画面左右边缘。
+    "subtitle_fit_frame": True,
+    # 帧宽的安全余量：右侧留 5% 给字形和描边，避免贴边
+    "subtitle_safety": 0.95,
     # 配音单元拟合：合并同说话人的相邻短句，再压缩仍超长的句子。
     # 预测模型按 IndexTTS2 实测拟合：audio ≈ 1.30s + 0.123s/汉字。
     "fit_merge": True,
@@ -970,6 +977,31 @@ def prep(cfg: dict, items: list[tuple[str, Path]], force: bool = False) -> bool:
     return ok
 
 
+def probe_display_size(path: Path, cfg: dict) -> tuple[int, int]:
+    """Frame size used for burning (rotation metadata applied)."""
+    try:
+        cp = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height:stream_side_data=rotation",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=env(cfg))
+        streams = json.loads(cp.stdout or "{}").get("streams") or [{}]
+        st = streams[0]
+        width = int(st.get("width") or 0)
+        height = int(st.get("height") or 0)
+        for side in st.get("side_data_list") or []:
+            try:
+                if abs(int(side.get("rotation") or 0)) % 180 == 90:
+                    width, height = height, width
+                    break
+            except (TypeError, ValueError):
+                continue
+        return width, height
+    except Exception:
+        return 0, 0
+
+
 def dub_one(cfg: dict, stem: str, src: Path, force: bool = False) -> bool:
     p = paths(cfg, stem)
     en = p["prep"] / "en.srt"
@@ -980,7 +1012,7 @@ def dub_one(cfg: dict, stem: str, src: Path, force: bool = False) -> bool:
     p["dub"].mkdir(parents=True, exist_ok=True)
     shutil.copy2(en, p["dub"] / f"{cfg['source_lang']}.srt")
     shutil.copy2(target, p["dub"] / f"{cfg['target_lang']}.srt")
-    run_cfg = cfg
+    overrides: dict = {}
     tts_srt = p["prep"] / f"{target.stem}.tts.srt"
     if tts_srt.exists():
         try:
@@ -995,9 +1027,19 @@ def dub_one(cfg: dict, stem: str, src: Path, force: bool = False) -> bool:
         if 0 < n_tts < n_disp:
             dub_tts = p["dub"] / f"{cfg['target_lang']}.tts.srt"
             shutil.copy2(tts_srt, dub_tts)
-            run_cfg = dict(cfg)
-            run_cfg["_tts_srt"] = str(dub_tts)
+            overrides["_tts_srt"] = str(dub_tts)
             print(f"[dub] {stem}: TTS units {n_tts} (display cues {n_disp})")
+    # One-line display cues are split by VTV_CJK_LEN inside pyVideoTrans.  A
+    # fixed 22 fits 16:9 but runs past the edges of 960x1080/640x720 frames, so
+    # derive the limit from the real frame width for this video.
+    width, height = probe_display_size(src, cfg)
+    limit = display_limit(width, height, cfg)
+    configured = int(cfg.get("subtitle_max_chars", 22) or 22)
+    if width and height and limit != configured:
+        overrides["subtitle_max_chars"] = limit
+        print(f"[dub] {stem}: frame {width}x{height} -> subtitle limit {limit} "
+              f"chars (configured {configured})")
+    run_cfg = dict(cfg, **overrides) if overrides else cfg
     subtitle_type = {"none": 0, "hard": 1, "soft": 2, "dual-hard": 3,
                      "dual-soft": 4}.get(cfg.get("subtitle_mode", "hard"), 1)
     extra = []

@@ -6,6 +6,12 @@
 - 最终显示字幕**每条只显示一行**：中文上限 22 字（`subtitle_max_chars` /
   `VTV_CJK_LEN` / `cjk_len` / QC 的 `MAX_CJK_PER_LINE` 必须一致）。完整句过长时
   在标点或空格处拆成多条一行字幕；拉丁技术词（PagedAttention、vLLM、token）保持原子。
+- **一行宽度按帧宽动态收紧**（`subtitle_fit_frame`，默认开）：ffmpeg 生成的 ASS 是
+  `PlayRes 384x288`、字号 16、左右边距 10，libass 按 `帧高/288` 放大字号，所以
+  `帧宽/帧高 < 4:3` 时固定 22 字会超出左右边缘。`dub` 先用 ffprobe 取源视频帧宽高，
+  用 `scripts/display_fit.py` 算出该帧能放下的字数（960x1080 ≈ 14、640x720 ≈ 14、
+  1080x1920 ≈ 8、16:9 仍为 22），再作为 `VTV_CJK_LEN` 交给 `_display_items` 切条。
+  QC 用同一公式核对成片，超宽的行直接判失败。
 - `prep` 的 DeepSeek 审校把完整句合并成 **TTS 语义单元**（可跨多条显示字幕）；
   显示字幕在最终音画时间轴上按 TTS 单元重新分配，因此字幕与语音/画面同步。
   两者块数不同是正常的。

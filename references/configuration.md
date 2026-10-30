@@ -19,7 +19,9 @@
 | `source_lang` | `en` | 源语言代码，见 `languages.md` |
 | `target_lang` | `zh-cn` | 目标语言代码 |
 | `subtitle_mode` | `hard` | `none` / `hard` / `soft` / `dual-hard` / `dual-soft`；默认硬字幕 |
-| `subtitle_max_chars` | `22` | 每条显示字幕一行最多汉字数；超出拆成多条一行字幕。只作用于 CJK；非中文用 pyVideoTrans 的 `other_len`（默认 60） |
+| `subtitle_max_chars` | `22` | 每条显示字幕一行最多汉字数的**上限**；超出拆成多条一行字幕。只作用于 CJK；非中文用 pyVideoTrans 的 `other_len`（默认 60） |
+| `subtitle_fit_frame` | `true` | 按实际帧宽收紧 `subtitle_max_chars`：960x1080 / 640x720 约 14 字，竖屏 1080x1920 约 8 字；16:9 仍是 22 字。关闭后回到固定 22 字（窄画幅会溢出画面） |
+| `subtitle_safety` | `0.95` | 帧宽安全余量（左右各留约 2.5%）；字形或描边仍贴边时调小到 0.9 |
 | `translate_channel` | `deepseek` | 翻译渠道名，见 `channels.md` |
 | `deepseek_model` | `deepseek-flash` | DeepSeek 模型名 |
 | `asr_model` | `large-v3-turbo` | Whisper 模型，见 `models.md` |

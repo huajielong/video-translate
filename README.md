@@ -7,7 +7,7 @@
 
 ## 特性
 
-- 翻译前后语义重断句，DeepSeek 审校后生成 TTS 语义单元；显示字幕保持一行 22 字。
+- 翻译前后语义重断句，DeepSeek 审校后生成 TTS 语义单元；显示字幕保持一行，上限按视频帧宽动态收紧（16:9 为 22 字，960x1080/640x720 约 14 字）。
 - TTS 绝对原速；音频长于槽位时慢放视频片段，短于槽位时最多加快 1.25×，目标停顿 300ms。
 - 每个 TTS 单元精确裁边、20ms 淡入淡出、前后 80ms 纯静音，减少句间“嗖”声。
 - 逐句配音缓存、断点续跑、QC 汇总。
@@ -201,7 +201,7 @@ cp config.example.json config.json
 - `voice_autorate=false`、`video_autorate=true`：声音优先。
 - `max_video_speedup_rate=1.25`、`max_phrase_pause_ms=300`。
 - `subtitle_mode=hard` 或 `soft`。
-- `subtitle_max_chars=22`（CJK）。
+- `subtitle_max_chars=22`（CJK 上限；`subtitle_fit_frame=true` 会按帧宽收紧到约 8–22 字）。
 - `resegment_llm_check=true`：DeepSeek 审校断句。
 - `duration_tol_s=15`：QC 时长容差的绝对下限。
 

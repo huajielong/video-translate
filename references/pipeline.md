@@ -30,7 +30,8 @@
   `resegment_source_max_chars`（140），目标规则块上限 `resegment_target_max_chars`（44）。
 - `resegment_llm_check=true` 时，`resegment_check.py` 把整段字幕交给 DeepSeek，
   只允许合并相邻块或轻微压缩，不改事实/数字/术语；结果写成 `<target>.tts.srt`。
-- 显示字幕按 `subtitle_max_chars`（22 个汉字）切成一行的短块；TTS 使用完整语义单元，
+- 显示字幕按 `subtitle_max_chars`（22 个汉字，窄画幅由 `subtitle_fit_frame` 按帧宽收紧）
+  切成一行的短块；TTS 使用完整语义单元，
   两者块数不同是正常的。DeepSeek 失败时自动回退规则断句。
 - 有 `.tts.srt` 时 `pipeline.py` 通过 `VTV_TTS_SRT` 传给 dub，`_stage_align.py`
   会从最终音画时间轴重新生成显示字幕，不会用 TTS 单元覆盖显示 SRT。

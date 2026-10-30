@@ -37,7 +37,8 @@ Confirm these before starting:
 
 - `source_lang` / `target_lang` (default `en` / `zh-cn`)
 - `subtitle_mode` (`hard` or `soft`)
-- `subtitle_max_chars` (22 for CJK; non-CJK uses `other_len=60`)
+- `subtitle_max_chars` (22 for CJK; non-CJK uses `other_len=60`); `subtitle_fit_frame`
+  tightens it per video so a 960x1080/portrait frame does not overflow
 - `voice_autorate=false`, `video_autorate=true`
 - `max_video_speedup_rate=1.25`, `max_phrase_pause_ms=300`
 - `duration_tol_s=15`

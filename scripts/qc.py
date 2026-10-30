@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _winhide import hide_console_windows  # noqa: E402
+from display_fit import load_ass_style, frame_char_limit  # noqa: E402
 
 hide_console_windows()
 
@@ -50,9 +51,28 @@ LOUDNESS_TARGET = -18.0
 LOUDNESS_TOL = 1.0
 TRUE_PEAK_MAX = -1.0
 MAX_LINES = 1
-# Must match fit_wrap_width (22): merged semantic sentences can be 44 chars,
-# displayed as 2 lines of 22.  The old 18 came from the pre-merge era.
+# Design cap; the real per-video limit is derived from the frame width in
+# check_video() so a 960x1080 or portrait video does not get 22-char lines that
+# run past the edges.
 MAX_CJK_PER_LINE = 22
+# pyVideoTrans' `other_len` for non-CJK targets.
+MAX_OTHER_PER_LINE = 60
+CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯豈-﫿]")
+
+
+def subtitles_are_cjk(path: str) -> bool:
+    """Guess the target script from the cue text (timecodes excluded)."""
+    try:
+        text = "".join(b["text"] for b in parse_srt(path))
+    except Exception:
+        return True
+    chars = [c for c in text if not c.isspace() and not c.isdigit()]
+    if not chars:
+        return True
+    hits = sum(1 for c in chars if CJK_RE.match(c))
+    return hits / len(chars) >= 0.3
+
+
 GLOSSARY_MIN_RECALL = 0.95
 
 
@@ -146,21 +166,24 @@ def _term_in(term: str, text: str) -> bool:
     return term in text
 
 
-def check_subtitles(zh_srt: str, en_srt: str | None, glossary: str | None) -> dict:
+def check_subtitles(zh_srt: str, en_srt: str | None, glossary: str | None,
+                    max_chars: int = MAX_CJK_PER_LINE) -> dict:
     zh = parse_srt(zh_srt)
     en = parse_srt(en_srt) if en_srt and Path(en_srt).exists() else []
+    max_chars = max(1, int(max_chars or MAX_CJK_PER_LINE))
     issues = []
     display_lines = 0
     long_lines = 0
     for i, b in enumerate(zh, 1):
         lines = b["text"].split("\n")
-        estimated = (sum(estimate_lines(ln, MAX_CJK_PER_LINE) for ln in lines)
+        estimated = (sum(estimate_lines(ln, max_chars) for ln in lines)
                      if lines else 0)
         display_lines = max(display_lines, estimated)
         if estimated > MAX_LINES:
-            issues.append(f"block {i}: ~{estimated} display lines")
+            issues.append(f"block {i}: ~{estimated} display lines "
+                          f"(frame allows {max_chars} chars/line)")
         for ln in lines:
-            if len(ln) > MAX_CJK_PER_LINE:
+            if len(ln) > max_chars:
                 long_lines += 1
         if not b["text"].strip():
             issues.append(f"block {i}: empty text")
@@ -204,6 +227,7 @@ def check_subtitles(zh_srt: str, en_srt: str | None, glossary: str | None) -> di
 
     return {
         "blocks": len(zh),
+        "max_chars": max_chars,
         "max_lines": display_lines,
         "long_lines": long_lines,
         "duplicates": dup,
@@ -270,9 +294,31 @@ def check_video(video: str, source: str, zh_srt: str, en_srt: str | None,
             result["warnings"].append(f"true peak {peak} dBFS > {TRUE_PEAK_MAX}")
 
     if zh_srt and Path(zh_srt).exists():
-        result["subtitles"] = check_subtitles(zh_srt, en_srt, glossary)
+        # Same width budget the aligner used when it split the display cues,
+        # so QC catches lines that would run past the left/right frame edge.
+        is_cjk = subtitles_are_cjk(zh_srt)
+        cap = MAX_CJK_PER_LINE if is_cjk else MAX_OTHER_PER_LINE
+        max_chars = cap
+        if v_streams:
+            video_stream = v_streams[0]
+            width = int(video_stream.get("width") or 0)
+            height = int(video_stream.get("height") or 0)
+            for side in video_stream.get("side_data_list") or []:
+                try:
+                    if abs(int(side.get("rotation") or 0)) % 180 == 90:
+                        width, height = height, width
+                        break
+                except (TypeError, ValueError):
+                    continue
+            max_chars = frame_char_limit(width, height, load_ass_style(),
+                                         cap=cap, cjk=is_cjk)
+        result["subtitles"] = check_subtitles(zh_srt, en_srt, glossary, max_chars)
         if result["subtitles"]["max_lines"] > MAX_LINES:
             result["errors"].append(f"subtitles have {result['subtitles']['max_lines']} lines")
+        if result["subtitles"]["long_lines"]:
+            result["errors"].append(
+                f"{result['subtitles']['long_lines']} subtitle lines exceed "
+                f"{max_chars} chars (frame width)")
     else:
         result["errors"].append("zh subtitle missing")
 

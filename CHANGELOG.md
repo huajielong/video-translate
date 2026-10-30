@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-30
+
+- Fit one-line display subtitles to the real frame width (`subtitle_fit_frame`,
+  `subtitle_safety`): a fixed 22-char line overflowed 960x1080/640x720/portrait
+  frames because libass scales the ASS font by height/288. `dub` now derives the
+  per-video limit from ffprobe dimensions (`scripts/display_fit.py`) and passes it
+  as `VTV_CJK_LEN`; 16:9 still uses the 22-char cap.
+- QC checks each line against the same frame budget and fails on
+  `N subtitle lines exceed X chars (frame width)`.
+
 ## 2026-10-23
 
 - Default to audio_native: native-speed TTS, video PTS adjustment, 300ms phrase pauses.
