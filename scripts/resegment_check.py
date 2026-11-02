@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Ask DeepSeek to audit rule-based subtitle sentence boundaries.
+"""Ask an LLM (local first, DeepSeek fallback) to audit subtitle boundaries.
 
 The rule pass in ``resegment_srt.py`` merges obvious fragments, but it cannot
 tell whether two well-formed-looking cues belong to one sentence.  This pass
-sends the whole cue list to DeepSeek and asks it to *only* merge adjacent cues
+sends the whole cue list to the LLM and asks it to *only* merge adjacent cues
 (or keep them), never to rewrite, translate, add, or remove words.
 
 Every proposed group is validated locally before use:
@@ -27,6 +27,7 @@ import re
 import sys
 import urllib.request
 from pathlib import Path
+from urllib.error import HTTPError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from resegment_srt import (  # noqa: E402
@@ -59,19 +60,40 @@ BASE_DEFAULT = "https://api.deepseek.com/v1"
 TERM = re.compile(r"[A-Za-z0-9][A-Za-z0-9_+.\-/]*")
 
 
+def _is_local(base: str) -> bool:
+    return base.startswith("http://") or "127.0.0.1" in base or "localhost" in base
+
+
 def load_credentials() -> tuple[str, str, str]:
-    key = os.environ.get("DEEPSEEK_API_KEY", "")
+    """Resolve the review endpoint.
+
+    pipeline.py passes VTV_RESEGMENT_API / _MODEL / _KEY for each provider it
+    tries (local first, DeepSeek second).  Standalone runs fall back to the
+    pyVideoTrans params: a localhost ``localllm_api`` wins over DeepSeek.
+    """
+    key = os.environ.get("VTV_RESEGMENT_KEY", "") or os.environ.get("DEEPSEEK_API_KEY", "")
     model = os.environ.get("VTV_RESEGMENT_MODEL", "")
-    base = os.environ.get("DEEPSEEK_BASE_URL", "")
+    base = os.environ.get("VTV_RESEGMENT_API", "") or os.environ.get("DEEPSEEK_BASE_URL", "")
     path = params_path()
+    params = {}
     if path is not None:
         try:
             params = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             params = {}
-        key = key or params.get("deepseek_key", "")
-        model = model or params.get("deepseek_model", "")
-    return key, model or MODEL_DEFAULT, (base or BASE_DEFAULT).rstrip("/")
+    model = model or params.get("deepseek_model", "")
+    if not base:
+        local_api = str(params.get("localllm_api") or "")
+        if local_api and _is_local(local_api):
+            base = local_api
+            model = os.environ.get("VTV_RESEGMENT_MODEL", "") or \
+                str(params.get("localllm_model") or "") or model
+    if not key and not base:
+        key = str(params.get("deepseek_key") or "")
+    base = (base or BASE_DEFAULT).rstrip("/")
+    if _is_local(base) and not os.environ.get("VTV_RESEGMENT_KEY"):
+        key = "local"
+    return key, model or MODEL_DEFAULT, base
 
 
 def cache_key(texts: list[str], max_chars: int, model: str) -> str:
@@ -99,7 +121,7 @@ def build_prompt(texts: list[str], max_chars: int) -> str:
 
 def call_llm(texts: list[str], max_chars: int, key: str, model: str,
              base: str) -> list[dict] | None:
-    payload = json.dumps({
+    body = {
         "model": model,
         "messages": [
             {"role": "system", "content": "只输出严格 JSON，不要解释。"},
@@ -108,24 +130,50 @@ def call_llm(texts: list[str], max_chars: int, key: str, model: str,
         "temperature": 0.1,
         "max_tokens": 2048,
         "response_format": {"type": "json_object"},
+    }
+    if not _is_local(base):
         # deepseek-flash is a reasoning model; disable thinking so content is JSON.
-        "thinking": {"type": "disabled"},
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        base + "/chat/completions", data=payload, method="POST",
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {key}"})
+        # Local servers either ignore or reject this field, so send it only online.
+        body["thinking"] = {"type": "disabled"}
     try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            data = json.loads(resp.read().decode("utf-8", "replace"))
+        timeout = float(os.environ.get("VTV_RESEGMENT_TIMEOUT") or 180)
+    except (TypeError, ValueError):
+        timeout = 180.0
+    try:
+        data = _post(base, body, key, timeout)
+    except HTTPError as exc:
+        if exc.code not in (400, 422):
+            print(f"[resegment-check] {base} unavailable, fallback to rules: {exc}")
+            return None
+        body.pop("response_format", None)
+        body.pop("thinking", None)
+        try:
+            data = _post(base, body, key, timeout)
+        except Exception as exc2:  # noqa: BLE001
+            print(f"[resegment-check] {base} unavailable, fallback to rules: {exc2}")
+            return None
+    except Exception as exc:  # noqa: BLE001
+        print(f"[resegment-check] {base} unavailable, fallback to rules: {exc}")
+        return None
+    try:
         content = data["choices"][0]["message"]["content"]
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
         obj = json.loads(content)
         groups = obj.get("groups")
         return groups if isinstance(groups, list) else None
     except Exception as exc:  # noqa: BLE001
-        print(f"[resegment-check] DeepSeek unavailable, fallback to rules: {exc}")
+        print(f"[resegment-check] bad response from {base}: {exc}")
         return None
+
+
+def _post(base: str, body: dict, key: str, timeout: float) -> dict:
+    req = urllib.request.Request(
+        base + "/chat/completions", data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {key}"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", "replace"))
 
 
 def validate_groups(groups, blocks) -> list[dict] | None:
@@ -168,15 +216,38 @@ def group_is_safe(original: str, proposed: str) -> bool:
     return True
 
 
-def apply_tts_groups(groups: list[dict], blocks: list[dict]) -> list[dict]:
-    """One TTS unit per DeepSeek group; text may exceed the display width."""
+def _timed_chunks(start: int, end: int, text: str, max_chars: int) -> list[dict]:
+    chunks: list[str] = []
+    for sentence in split_sentences(text):
+        chunks.extend(split_long(sentence, max_chars))
+    if not chunks:
+        chunks = [text]
+    total = sum(max(1, len(c)) for c in chunks)
+    cursor = start
+    span = max(1, end - start)
+    out = []
+    for chunk in chunks:
+        dur = span * max(1, len(chunk)) / total
+        out.append({"start": int(round(cursor)),
+                    "end": int(round(cursor + dur)), "text": chunk})
+        cursor += dur
+    out[-1]["end"] = end
+    return out
+
+
+def apply_tts_groups(groups: list[dict], blocks: list[dict],
+                     max_chars: int) -> list[dict]:
+    """One TTS unit per LLM group, split only when a group exceeds max_chars."""
     out = []
     for g in groups:
         group_blocks = [blocks[i - 1] for i in g["blocks"]]
         original = " ".join(b["text"] for b in group_blocks).strip()
         text = g["text"] if group_is_safe(original, g["text"]) else original
-        out.append({"start": group_blocks[0]["start"],
-                    "end": group_blocks[-1]["end"], "text": text})
+        start, end = group_blocks[0]["start"], group_blocks[-1]["end"]
+        if len(text) <= max_chars:
+            out.append({"start": start, "end": end, "text": text})
+        else:
+            out.extend(_timed_chunks(start, end, text, max_chars))
     return out
 
 
@@ -188,7 +259,7 @@ def apply_groups(groups: list[dict], blocks: list[dict], max_chars: int) -> list
         original = " ".join(b["text"] for b in group_blocks).strip()
         text = g["text"] if group_is_safe(original, g["text"]) else original
         if len(group_blocks) > 1 and len(text) <= max_chars:
-            # DeepSeek merged a fragmented sentence: keep it as one TTS unit.
+            # The LLM merged a fragmented sentence: keep it as one TTS unit.
             chunks = [text]
         else:
             chunks = []
@@ -218,6 +289,9 @@ def main() -> int:
     ap.add_argument("--tts-output", default="",
                     help="write merged sentence groups for TTS; keep --output as display SRT")
     ap.add_argument("--no-cache", action="store_true")
+    ap.add_argument("--require-llm", action="store_true",
+                    help="exit 3/4 when the LLM call fails so the caller can try "
+                         "another provider; otherwise always keep rule-based output")
     args = ap.parse_args()
 
     src = Path(args.input)
@@ -226,13 +300,17 @@ def main() -> int:
         print(f"no subtitle blocks in {src}")
         return 2
     texts = [b["text"] for b in blocks]
-    key, model, base = load_credentials()
-    if not key:
-        print("[resegment-check] no DeepSeek key; keeping rule-based result")
+
+    def keep_rules(code: int) -> int:
         write_srt(blocks, Path(args.output))
         if args.tts_output:
             write_srt(blocks, Path(args.tts_output))
-        return 0
+        return code if args.require_llm else 0
+
+    key, model, base = load_credentials()
+    if not key:
+        print("[resegment-check] no LLM endpoint configured; keeping rule-based result")
+        return keep_rules(3)
 
     digest = cache_key(texts, args.max_chars, model)
     cached = CACHE / f"{digest}.json"
@@ -245,17 +323,11 @@ def main() -> int:
     if groups is None:
         groups = call_llm(texts, args.max_chars, key, model, base)
         if groups is None:
-            write_srt(blocks, Path(args.output))
-            if args.tts_output:
-                write_srt(blocks, Path(args.tts_output))
-            return 0
+            return keep_rules(3)
         valid = validate_groups(groups, blocks)
         if valid is None:
             print("[resegment-check] invalid group list; keeping rule-based result")
-            write_srt(blocks, Path(args.output))
-            if args.tts_output:
-                write_srt(blocks, Path(args.tts_output))
-            return 0
+            return keep_rules(4)
         groups = valid
         try:
             CACHE.mkdir(parents=True, exist_ok=True)
@@ -266,13 +338,13 @@ def main() -> int:
     else:
         groups = validate_groups(groups, blocks)
         if groups is None:
-            write_srt(blocks, Path(args.output))
-            return 0
+            cached.unlink(missing_ok=True)
+            return keep_rules(4)
 
     if args.tts_output:
         # Display cues stay as-is; the merged groups are only TTS units.
         write_srt(blocks, Path(args.output))
-        tts_units = apply_tts_groups(groups, blocks)
+        tts_units = apply_tts_groups(groups, blocks, args.max_chars)
         write_srt(tts_units, Path(args.tts_output))
         print(f"resegment-check: {len(groups)} TTS groups, "
               f"display {len(blocks)} cues -> {args.tts_output}")

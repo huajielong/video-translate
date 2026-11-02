@@ -20,8 +20,15 @@ process has no console, so no cmd/conhost window flashes.
 
 ## First run: remind the user
 
-Before the first `run`, ask the user to configure the DeepSeek key; do not ask
-them to paste it into chat. The key belongs in
+Translation and resegment review are local-first. `translate_channel=auto`
+probes local OpenAI-compatible servers (`local_llm_api`, then
+`local_llm_candidates` → llama.cpp `:8081`, Ollama `:11434`, then
+`params.json:localllm_api`). A single-model server is used directly; for
+multi-model servers (Ollama) set `local_llm_model` so a weak model is never
+picked silently.
+
+Only when no local LLM is reachable is a DeepSeek key needed. Do not ask the
+user to paste it into chat. The key belongs in
 `<pyvideotrans_home>/videotrans/params.json` (default
 `<vendor root>/pyvideotrans/videotrans/params.json`; the vendor root is outside
 the skill, see `references/deployment.md`), not `config.json`.
@@ -32,7 +39,7 @@ python scripts/pipeline.py setup --deepseek-key "sk-..."
 ```
 
 `params.example.json` is a safe template. `run`/`prep` exit early with a clear
-message when the key is missing; `doctor` also warns.
+message when neither a local LLM nor a key is available; `doctor` reports both.
 
 Confirm these before starting:
 
@@ -43,7 +50,8 @@ Confirm these before starting:
 - `voice_autorate=false`, `video_autorate=true`
 - `max_video_speedup_rate=1.25`, `max_phrase_pause_ms=300`
 - `duration_tol_s=15`
-- `resegment_llm_check=true`
+- `resegment_llm_check=true`, `resegment_llm_provider=auto`
+- `translate_channel=auto` (local first, DeepSeek fallback)
 - `clone_ref_mode=line`
 - `glossary` for the course/domain
 - `--src` / `--out` (or `src_dir` / `out_dir`) and free disk

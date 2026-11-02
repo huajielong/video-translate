@@ -1,5 +1,10 @@
 {
-  "translate_type": 5,
+  "translate_type": 9,
+  "localllm_api": "http://127.0.0.1:8081/v1",
+  "localllm_model": "qwen",
+  "localllm_key": "ollama",
+  "localllm_reasoning_effort": "none",
+  "localllm_max_token": 4096,
   "deepseek_key": "",
   "deepseek_model": "deepseek-flash",
   "tts_type": 12,

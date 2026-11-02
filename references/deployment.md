@@ -123,11 +123,11 @@ python scripts/pipeline.py setup \
     实际缓存时长判断、DeepSeek 压缩、术语保护、`thinking=disabled`）；
     `line` 模式额外用 CAMPPlus 聚类做同说话人合并键；聚类子进程需要
     `VTV_ITT_SITE`（IndexTTS2 venv 的 `site-packages`），否则 `rc=1`、0 合并
-  - `_stage_dubbing.py` 支持 `VTV_TTS_SRT`：TTS 用 DeepSeek 审校后的语义单元，
+  - `_stage_dubbing.py` 支持 `VTV_TTS_SRT`：TTS 用 LLM 审校后的语义单元，
     显示字幕保持短块，`_save_srt_target` 不覆盖显示 SRT
   - `_stage_dubbing.py` / `tts/_index.py` 重启 daemon 时直接调用
     `pythonw + scripts/indextts2.py stop --json`，不经过 `indextts2.cmd`
-  - `scripts/resegment_srt.py` 规则重断句；`scripts/resegment_check.py` DeepSeek
+  - `scripts/resegment_srt.py` 规则重断句；`scripts/resegment_check.py` LLM
     审校（只允许合并/轻微压缩，失败回退规则）；`pipeline.py` 在 `prep` 前后调用，
     并生成 `<target>.tts.srt`
   - `pipeline.py` 的 `post` 在 `video_autorate` 下按成品自身时长输出；

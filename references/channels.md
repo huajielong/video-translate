@@ -38,6 +38,10 @@
 | 29 | atlascloud | `atlascloud_key` | `atlascloud_model` | — | `ATLASCLOUD_API_KEY` |
 
 > 渠道 9 是通用 OpenAI 兼容通道：`localllm_api` 指向任意兼容端点（Ollama、vLLM、第三方中转），`localllm_key` **必须非空**（Ollama 可填 `ollama` 占位），否则 OpenAI SDK 会抛 `Missing credentials`。
+>
+> 技能层的 `translate_channel` 还支持 `auto`（默认）：先探测本地渠道 9，不可达或
+> 没有合适模型时才回退渠道 5（DeepSeek）。`auto` 由 `pipeline.py` 解析成具体渠道后
+> 再调用包装脚本；手工调用 `trans_cli.py` 时仍要写 `deepseek` / `ollama` 等具体名称。
 
 ## TTS 渠道（`--tts-channel` / `--tts_type`）
 
@@ -64,12 +68,12 @@
 
 ```jsonc
 {
-  "translate_type": 5,          // 当前默认翻译渠道：5 = DeepSeek
-  "deepseek_key": "sk-...",
+  "translate_type": 9,          // setup 探测到本地 LLM 时写 9；只有 DeepSeek 时写 5
+  "deepseek_key": "sk-...",     // 仅在线兜底需要
   "deepseek_model": "deepseek-flash",
   "tts_type": 0,                 // 0 = Edge-TTS
-  "localllm_api": "http://127.0.0.1:11434/v1",
-  "localllm_model": "qwen2.5:3b",
+  "localllm_api": "http://127.0.0.1:8081/v1",
+  "localllm_model": "qwen",
   "localllm_key": "ollama"       // 必须非空
 }
 ```

@@ -12,7 +12,7 @@
   用 `scripts/display_fit.py` 算出该帧能放下的字数（960x1080 ≈ 14、640x720 ≈ 14、
   1080x1920 ≈ 8、16:9 仍为 22），再作为 `VTV_CJK_LEN` 交给 `_display_items` 切条。
   QC 用同一公式核对成片，超宽的行直接判失败。
-- `prep` 的 DeepSeek 审校把完整句合并成 **TTS 语义单元**（可跨多条显示字幕）；
+- `prep` 的 LLM 审校把完整句合并成 **TTS 语义单元**（可跨多条显示字幕）；
   显示字幕在最终音画时间轴上按 TTS 单元重新分配，因此字幕与语音/画面同步。
   两者块数不同是正常的。
 - 单语字幕（`hard`/`soft`）无论是否命中 TTS 语义单元，`_stage_align` 都会从最终
@@ -41,7 +41,7 @@
   `max_video_speedup_rate`（1.25×）到“音频 + `max_phrase_pause_ms`（300ms）”。
 - TTS 边缘统一处理：精确裁到首/末非静音，20ms fade in/out，前后各加 80ms 纯数字
   静音预滚；用于消除句间“嗖”声，也避免 TTS 自带边缘静音在句间叠加。
-- `fit_merge` / `fit_condense` 只在**没有 TTS 语义单元**时兜底（DeepSeek 不可用或
+- `fit_merge` / `fit_condense` 只在**没有 TTS 语义单元**时兜底（LLM 审校不可用或
   `resegment_llm_check=false`）：合并同说话人相邻短句，再压缩仍超速的句子。
   完整机制、调参、预测模型标定见 `audio-fit.md`。
 - 单句参考太短/含噪声会不稳定；有 BGM 时建议预分离人声。

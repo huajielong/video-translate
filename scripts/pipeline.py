@@ -67,7 +67,15 @@ DEFAULTS = {
     "source_lang": "en",
     "target_lang": "zh-cn",
     "subtitle_mode": "hard",
-    "translate_channel": "deepseek",
+    # auto = local LLM first, DeepSeek only when no local server is reachable.
+    # Values: auto | local | deepseek | <any trans_cli channel name>
+    "translate_channel": "auto",
+    # Explicit local OpenAI-compatible endpoint/model.  Empty means: probe
+    # local_llm_candidates, then params.json's localllm_api.
+    "local_llm_api": "",
+    "local_llm_model": "",
+    "local_llm_candidates": "http://127.0.0.1:8081/v1,http://127.0.0.1:11434/v1",
+    "local_llm_timeout": 1.5,
     "deepseek_model": "deepseek-flash",
     "asr_model": "large-v3-turbo",
     # 源视频旁有 .en-us.vtt / .en.vtt / .en.srt 时直接导入，跳过 ASR
@@ -99,9 +107,12 @@ DEFAULTS = {
     "resegment_max_gap_ms": 900,
     "resegment_source_max_chars": 140,
     "resegment_target_max_chars": 44,
-    # DeepSeek audits the rule-based sentence boundaries; it only proposes
-    # TTS groups, while display cues stay at the rule-based boundaries.
+    # An LLM audits the rule-based sentence boundaries; it only proposes TTS
+    # groups, while display cues stay at the rule-based boundaries.
     "resegment_llm_check": True,
+    # auto = local LLM first, DeepSeek only if the local call fails.
+    # Values: auto | local | deepseek | off
+    "resegment_llm_provider": "auto",
     # 一条显示字幕的宽度（CJK 字数）；过长会拆成多条一行字幕。
     # 竖屏/窄画幅的字幕会被 frame 宽度收紧：见 subtitle_fit_frame。
     "subtitle_max_chars": 22,
@@ -161,6 +172,222 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# LLM backends: local OpenAI-compatible server first, DeepSeek as fallback
+# --------------------------------------------------------------------------
+def read_params(cfg: dict) -> dict:
+    path = Path(cfg["pyvideotrans_home"]) / "videotrans" / "params.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _model_ids(base: str, timeout: float) -> list[str]:
+    """List model ids from an OpenAI-compatible /models endpoint."""
+    try:
+        req = urllib.request.Request(base.rstrip("/") + "/models")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+    except Exception:
+        return []
+    items = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(items, list) and isinstance(data, dict):
+        items = data.get("models")
+    ids: list[str] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        mid = item.get("id") or item.get("model") or item.get("name")
+        if mid and str(mid) not in ids:
+            ids.append(str(mid))
+    return ids
+
+
+def _candidate_pairs(cfg: dict) -> list[tuple[str, str]]:
+    """(api base, model hint) in probe order; deduplicated."""
+    env_api = os.environ.get("VTV_LOCAL_LLM_API", "").strip()
+    env_model = os.environ.get("VTV_LOCAL_LLM_MODEL", "").strip()
+    global_hint = env_model or str(cfg.get("local_llm_model") or "")
+    pairs: list[tuple[str, str]] = []
+    if env_api:
+        pairs.append((env_api, env_model))
+    if cfg.get("local_llm_api"):
+        pairs.append((str(cfg["local_llm_api"]), global_hint))
+    candidates = cfg.get("local_llm_candidates") or ""
+    if isinstance(candidates, str):
+        candidates = candidates.split(",")
+    for api in candidates:
+        api = str(api).strip()
+        if api:
+            pairs.append((api, global_hint))
+    params = read_params(cfg)
+    p_api = str(params.get("localllm_api") or "").strip()
+    if p_api:
+        pairs.append((p_api, global_hint or str(params.get("localllm_model") or "")))
+    out: list[tuple[str, str]] = []
+    index: dict[str, int] = {}
+    for api, hint in pairs:
+        key = api.rstrip("/")
+        if not key:
+            continue
+        if key in index:
+            i = index[key]
+            if not out[i][1] and hint:
+                out[i] = (out[i][0], hint)
+            continue
+        index[key] = len(out)
+        out.append((key, hint))
+    return out
+
+
+def local_llm(cfg: dict) -> dict | None:
+    """Probe local OpenAI-compatible servers; cache the result on cfg.
+
+    A candidate is usable when /models answers and a model can be chosen
+    unambiguously: either the configured hint exists there, or the server
+    exposes exactly one model (llama.cpp).  Multi-model servers such as
+    Ollama need ``local_llm_model`` so a weak model is never picked silently.
+    """
+    if "_local_llm" in cfg:
+        return cfg["_local_llm"]
+    try:
+        timeout = float(os.environ.get("VTV_LOCAL_LLM_TIMEOUT")
+                        or cfg.get("local_llm_timeout") or 1.5)
+    except (TypeError, ValueError):
+        timeout = 1.5
+    for api, hint in _candidate_pairs(cfg):
+        ids = _model_ids(api, timeout)
+        if not ids:
+            continue
+        if hint and hint in ids:
+            model = hint
+        elif len(ids) == 1:
+            model = ids[0]
+        else:
+            print(f"[llm] {api}: {len(ids)} models, set local_llm_model "
+                  f"(or VTV_LOCAL_LLM_MODEL) to choose one; skipping")
+            continue
+        if re.search(r"embed|rerank|bge-|minilm", model, re.I):
+            print(f"[llm] {api}: {model} looks like an embedding model; skipping")
+            continue
+        cfg["_local_llm"] = {"api": api, "model": model}
+        return cfg["_local_llm"]
+    cfg["_local_llm"] = None
+    return None
+
+
+def deepseek_settings(cfg: dict) -> tuple[str, str, str]:
+    params = read_params(cfg)
+    key = (os.environ.get("DEEPSEEK_API_KEY", "")
+           or str(params.get("deepseek_key") or ""))
+    model = (os.environ.get("VTV_RESEGMENT_MODEL", "")
+             or str(params.get("deepseek_model") or "")
+             or str(cfg.get("deepseek_model") or "deepseek-flash"))
+    base = (os.environ.get("DEEPSEEK_BASE_URL", "")
+            or "https://api.deepseek.com/v1").rstrip("/")
+    return key, model, base
+
+
+def resolve_mt_channel(cfg: dict) -> str:
+    """Decide the translation channel for this run.
+
+    ``auto`` probes the local OpenAI-compatible endpoints first and falls back
+    to DeepSeek only when none is reachable (or no suitable model is exposed).
+    """
+    requested = str(cfg.get("translate_channel") or "auto").strip().lower()
+    if requested in ("ollama", "localllm"):
+        requested = "local"
+
+    def choose_local() -> str:
+        local = local_llm(cfg)
+        if not local:
+            return ""
+        cfg["_mt_channel"] = "ollama"
+        cfg["_mt_local"] = local
+        print(f"[mt] local LLM: {local['api']} ({local['model']})")
+        return "ollama"
+
+    if requested in ("", "auto"):
+        channel = choose_local()
+        if channel:
+            return channel
+        if deepseek_key_present(cfg):
+            cfg["_mt_channel"] = "deepseek"
+            print("[mt] local LLM unavailable -> DeepSeek API")
+            return "deepseek"
+        cfg["_mt_channel"] = ""
+        print("[mt] no local LLM reachable and no DeepSeek key configured")
+        return ""
+    if requested == "local":
+        channel = choose_local()
+        if channel:
+            return channel
+        cfg["_mt_channel"] = ""
+        print("[mt] translate_channel=local but no local LLM answered; "
+              "start llama.cpp/Ollama or use translate_channel=auto")
+        return ""
+    if requested == "deepseek" and not deepseek_key_present(cfg):
+        print_deepseek_key_help(cfg)
+        cfg["_mt_channel"] = ""
+        return ""
+    cfg["_mt_channel"] = requested
+    return requested
+
+
+def ensure_llm_backend(cfg: dict) -> bool:
+    if resolve_mt_channel(cfg):
+        return True
+    print("[llm] no usable translation backend.")
+    print("      Start a local OpenAI-compatible server (llama.cpp/Ollama), or")
+    print('      configure DeepSeek: python scripts/pipeline.py setup --deepseek-key "sk-..."')
+    return False
+
+
+def mt_channel_args(cfg: dict) -> list[str]:
+    channel = cfg.get("_mt_channel") or resolve_mt_channel(cfg) or "deepseek"
+    args = ["--channel", channel]
+    local = cfg.get("_mt_local")
+    if channel == "ollama" and local:
+        params = read_params(cfg)
+        if str(params.get("localllm_api") or "").rstrip("/") != local["api"].rstrip("/"):
+            args += ["--api-base", local["api"]]
+        if str(params.get("localllm_model") or "") != local["model"]:
+            args += ["--model", local["model"]]
+    return args
+
+
+def review_providers(cfg: dict) -> list[dict]:
+    """LLM backends for the resegment audit, in fallback order."""
+    if not cfg.get("resegment_llm_check", True):
+        return []
+    mode = str(cfg.get("resegment_llm_provider") or "auto").strip().lower()
+    if mode in ("off", "none", "false", "0"):
+        return []
+    providers: list[dict] = []
+    local = local_llm(cfg) if mode in ("auto", "local") else None
+    if local:
+        providers.append({"name": "local", "api": local["api"],
+                          "model": local["model"], "key": "local"})
+    if mode in ("auto", "deepseek"):
+        key, model, base = deepseek_settings(cfg)
+        if key:
+            providers.append({"name": "deepseek", "api": base,
+                              "model": model, "key": key})
+    return providers
+
+
+def polish_provider(cfg: dict) -> dict | None:
+    local = local_llm(cfg)
+    if local:
+        return {"name": "local", "api": local["api"],
+                "model": local["model"], "key": "local"}
+    key, model, base = deepseek_settings(cfg)
+    if key:
+        return {"name": "deepseek", "api": base, "model": model, "key": key}
+    return None
 
 
 def pvt_python(cfg: dict) -> Path:
@@ -235,6 +462,20 @@ def env(cfg: dict) -> dict:
     e["VTV_FIT_PRED_B"] = str(cfg.get("fit_pred_b", 0.123))
     e["VTV_FIT_CONDENSE_SPEED"] = str(cfg.get("fit_condense_speed", 1.25))
     e["VTV_GLOSSARY_FILE"] = str(cfg.get("glossary", ""))
+    reseg = cfg.get("_reseg")
+    if reseg:
+        e["VTV_RESEGMENT_API"] = reseg["api"]
+        e["VTV_RESEGMENT_MODEL"] = reseg["model"]
+        e["VTV_RESEGMENT_KEY"] = reseg["key"]
+    else:
+        e.pop("VTV_RESEGMENT_API", None)
+        e.pop("VTV_RESEGMENT_MODEL", None)
+        e.pop("VTV_RESEGMENT_KEY", None)
+    polish = cfg.get("_polish")
+    if polish:
+        e["VTV_POLISH_API"] = polish["api"]
+        e["VTV_POLISH_MODEL"] = polish["model"]
+        e["VTV_POLISH_KEY"] = polish["key"]
     e["VTV_CLONE_REF_MODE"] = str(cfg.get("clone_ref_mode", "line") or "line")
     e["VTV_SPK_MAX"] = str(cfg.get("speaker_max", 0) or 0)
     e["VTV_SPK_THRESHOLD"] = str(cfg.get("speaker_threshold", 0.72) or 0.72)
@@ -400,8 +641,9 @@ def cmd_setup(args, cfg: dict) -> int:
         except Exception:
             params = {}
     key = args.deepseek_key or os.environ.get("DEEPSEEK_API_KEY", "")
+    local = local_llm(cfg)
     params.update({
-        "translate_type": 5,
+        "translate_type": 9 if local else 5,
         "deepseek_key": key or params.get("deepseek_key", ""),
         "deepseek_model": cfg["deepseek_model"],
         "tts_type": 12 if cfg["backend"] == "index" else 1,
@@ -410,6 +652,13 @@ def cmd_setup(args, cfg: dict) -> int:
         "model_name": cfg["asr_model"],
         "stt_model_name": cfg["asr_model"],
     })
+    if local:
+        params.setdefault("localllm_key", "ollama")
+        params["localllm_api"] = local["api"]
+        params["localllm_model"] = local["model"]
+        params.setdefault("localllm_reasoning_effort", "none")
+        params.setdefault("localllm_max_token", 4096)
+        print(f"[setup] local LLM: {local['api']} ({local['model']}) -> translate_type 9")
     params_path.parent.mkdir(parents=True, exist_ok=True)
     params_path.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -448,10 +697,17 @@ def cmd_doctor(_args, cfg: dict) -> int:
             key = json.loads(params.read_text(encoding="utf-8")).get("deepseek_key", "")
         except Exception:
             pass
+    local = local_llm(cfg)
+    add("Local LLM", bool(local),
+        f"{local['api']} ({local['model']})" if local
+        else "none reachable; DeepSeek fallback")
     key_ok = bool(key or os.environ.get("DEEPSEEK_API_KEY"))
-    add("DeepSeek key", key_ok, "env or params.json")
-    if not key_ok:
+    add("DeepSeek key", key_ok,
+        "fallback only" if local else "needed when no local LLM")
+    if not key_ok and not local:
         print_deepseek_key_help(cfg)
+    channel = resolve_mt_channel(cfg)
+    add("MT backend", bool(channel), channel or "none")
     add("Index API :8791", healthy(cfg["index_api"] + "/health"), cfg["index_api"])
     add("Gradio shim :7861", healthy(cfg["index_url"] + "/"), cfg["index_url"])
     add("glossary", Path(cfg["glossary"]).exists(), cfg["glossary"])
@@ -499,15 +755,6 @@ def print_deepseek_key_help(cfg: dict) -> None:
     print('             python scripts/pipeline.py setup --deepseek-key "sk-..."')
     print("           Or set DEEPSEEK_API_KEY and rerun setup.")
     print("           Do not paste the key into chat or commit params.json.")
-
-
-def require_deepseek_key(cfg: dict) -> bool:
-    if cfg.get("translate_channel", "deepseek") != "deepseek":
-        return True
-    if deepseek_key_present(cfg):
-        return True
-    print_deepseek_key_help(cfg)
-    return False
 
 
 def auto_setup(cfg: dict) -> bool:
@@ -914,8 +1161,9 @@ def resegment_source(cfg: dict, stem: str, p: dict, fresh: bool = False) -> None
 def resegment_target(cfg: dict, stem: str, p: dict, target: Path) -> None:
     """Split/merge translated cues at sentence boundaries.
 
-    The rule pass fixes display cues.  DeepSeek then audits the whole transcript
-    and writes merged *TTS units* (possibly longer than one display cue); the
+    The rule pass fixes display cues.  An LLM then audits the whole transcript
+    (local first, DeepSeek fallback) and writes merged *TTS units* (possibly
+    longer than one display cue); the
     dubbing stage uses those while the burned/archived subtitles keep the
     display cue boundaries.
     """
@@ -929,21 +1177,33 @@ def resegment_target(cfg: dict, stem: str, p: dict, target: Path) -> None:
     else:
         tmp.unlink(missing_ok=True)
 
-    if not cfg.get("resegment_llm_check", True):
+    providers = review_providers(cfg)
+    if cfg.get("_reseg_local_failed"):
+        providers = [x for x in providers if x["name"] != "local"]
+    if not providers:
+        print(f"[prep] {stem}: no LLM review backend; keeping rule-based cues")
         return
     checked = p["prep"] / f"{target.stem}.llm.tmp.srt"
     tts_tmp = p["prep"] / f"{target.stem}.tts.tmp.srt"
-    cmd = [sys.executable, str(SEGMENT_CHECK), "--input", str(target),
-           "--output", str(checked), "--tts-output", str(tts_tmp),
-           "--max-chars", str(max_chars), "--lang", cfg["target_lang"]]
-    rc = run(cmd, cfg, p["log"])
-    if rc == 0 and checked.exists():
-        checked.replace(target)
-    else:
+    for prov in providers:
         checked.unlink(missing_ok=True)
-    if tts_tmp.exists():
-        tts_tmp.replace(p["prep"] / f"{target.stem}.tts.srt")
-        print(f"[prep] {stem}: DeepSeek TTS groups -> {target.stem}.tts.srt")
+        tts_tmp.unlink(missing_ok=True)
+        cmd = [sys.executable, str(SEGMENT_CHECK), "--input", str(target),
+               "--output", str(checked), "--tts-output", str(tts_tmp),
+               "--max-chars", str(max_chars), "--lang", cfg["target_lang"],
+               "--require-llm"]
+        rc = run(cmd, dict(cfg, _reseg=prov), p["log"])
+        if rc == 0 and checked.exists() and tts_tmp.exists():
+            checked.replace(target)
+            tts_tmp.replace(p["prep"] / f"{target.stem}.tts.srt")
+            print(f"[prep] {stem}: {prov['name']} TTS groups -> {target.stem}.tts.srt")
+            return
+        checked.unlink(missing_ok=True)
+        tts_tmp.unlink(missing_ok=True)
+        if prov["name"] == "local":
+            cfg["_reseg_local_failed"] = True
+        print(f"[prep] {stem}: {prov['name']} resegment review failed rc={rc}")
+    print(f"[prep] {stem}: all LLM review backends failed; keeping rule-based cues")
 
 
 def asr_one(cfg: dict, stem: str, src: Path, force: bool = False) -> bool:
@@ -991,14 +1251,30 @@ def mt_one(cfg: dict, stem: str, force: bool = False) -> bool:
         return True
     mt_dir = p["prep"] / "mt"
     shutil.rmtree(mt_dir, ignore_errors=True)
-    cmd = wrapper_cmd(cfg, "sts", str(en), "--source", cfg["source_lang"],
-                      "--target", cfg["target_lang"], "--channel", cfg["translate_channel"],
-                      "--outdir", str(mt_dir), "--overwrite")
-    rc = run(cmd, cfg, p["log"])
+    channels = [cfg.get("_mt_channel") or resolve_mt_channel(cfg) or "deepseek"]
+    requested = str(cfg.get("translate_channel") or "auto").strip().lower()
+    if channels[0] == "ollama" and requested in ("", "auto"):
+        key, _, _ = deepseek_settings(cfg)
+        if key:
+            channels.append("deepseek")
+    rc = 1
     produced = mt_dir / f"en.{cfg['target_lang']}.srt"
-    if not produced.exists():
-        alternatives = list(mt_dir.glob(f"*.{cfg['target_lang']}.srt"))
-        produced = alternatives[0] if alternatives else produced
+    for channel in channels:
+        run_cfg = cfg if channel == channels[0] else dict(
+            cfg, _mt_channel=channel, _mt_local=None)
+        cmd = wrapper_cmd(cfg, "sts", str(en), "--source", cfg["source_lang"],
+                          "--target", cfg["target_lang"],
+                          *mt_channel_args(run_cfg),
+                          "--outdir", str(mt_dir), "--overwrite")
+        rc = run(cmd, run_cfg, p["log"])
+        produced = mt_dir / f"en.{cfg['target_lang']}.srt"
+        if not produced.exists():
+            alternatives = list(mt_dir.glob(f"*.{cfg['target_lang']}.srt"))
+            produced = alternatives[0] if alternatives else produced
+        if rc == 0 and produced.exists():
+            break
+        print(f"[prep] {stem}: {channel} MT failed rc={rc}")
+        shutil.rmtree(mt_dir, ignore_errors=True)
     if rc != 0 or not produced.exists():
         print(f"[prep] {stem}: translation failed rc={rc}")
         return False
@@ -1094,10 +1370,15 @@ def dub_one(cfg: dict, stem: str, src: Path, force: bool = False) -> bool:
         extra.append("--voice_autorate")
     if cfg.get("video_autorate", True):
         extra.append("--video_autorate")
+    channel_args = mt_channel_args(cfg)
+    if channel_args[1] == "ollama":
+        # Translation is already cached; do not let the wrapper start Ollama and
+        # compete with IndexTTS2 for VRAM during dubbing.
+        channel_args.append("--no-auto-ollama")
     cmd = wrapper_cmd(
         cfg, "vtv", str(src),
         "--source", cfg["source_lang"], "--target", cfg["target_lang"],
-        "--channel", cfg["translate_channel"],
+        *channel_args,
         "--tts-channel", cfg["backend"], "--voice", "clone",
         "--subtitle-type", str(subtitle_type),
         "--outdir", str(p["dub"]), "--overwrite", "--no-clear-cache")
@@ -1221,7 +1502,7 @@ def ensure_services(cfg: dict) -> None:
 def cmd_run(args, cfg: dict) -> int:
     if not _check_power(args):
         return 2
-    if not require_deepseek_key(cfg):
+    if not ensure_llm_backend(cfg):
         return 2
     items = videos(cfg, args.videos)
     ok = prep(cfg, items, args.force)
@@ -1317,7 +1598,7 @@ def main() -> int:
         if args.command == "status":
             return cmd_status(args, cfg)
         if args.command == "prep":
-            if not require_deepseek_key(cfg):
+            if not ensure_llm_backend(cfg):
                 return 2
             return 0 if prep(cfg, videos(cfg, args.videos), args.force) else 1
         if args.command == "dub":
@@ -1348,10 +1629,14 @@ def main() -> int:
             print(p.stderr, file=sys.stderr)
         return p.returncode
     if args.command == "polish":
+        prov = polish_provider(cfg)
+        if not prov:
+            print("[polish] no local LLM and no DeepSeek key; cannot review")
+            return 2
         return run([sys.executable, str(POLISH), "--srt", args.zh or args.video,
                     "--glossary", args.glossary or cfg["glossary"],
                     "--out", args.json_out or ((args.zh or args.video) + ".polished.srt")],
-                   cfg, LOGS / "polish.log")
+                   dict(cfg, _polish=prov), LOGS / "polish.log")
     if args.command == "report":
         logs = args.logs or str(LOGS)
         return run([sys.executable, str(REPORT), "--logs", logs,

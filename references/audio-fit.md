@@ -26,7 +26,7 @@ IndexTTS2 **每句有固定开销**（中文实测约 `1.3s + 0.123s/汉字`）�
 - 翻译前合并源碎句（`resegment_srt.py`，源 74 → 45 左右）；
 - 翻译后按句子边界重切；最终显示字幕按 **一行 22 字** 切条（CJK；非中文按
   `other_len`，默认 60）；
-- `resegment_llm_check` 把整段字幕交给 DeepSeek 审校，输出 **TTS 语义单元**
+- `resegment_llm_check` 把整段字幕交给 LLM 审校，输出 **TTS 语义单元**
   （001 最近一次：80 条一行显示字幕 → 31 个 TTS 单元）。显示字幕按 TTS 单元在
   最终音画时间轴上重新分配，字幕和语音/画面同步。
 
@@ -53,8 +53,8 @@ IndexTTS2 **每句有固定开销**（中文实测约 `1.3s + 0.123s/汉字`）�
 ## fit 兜底（无 TTS 语义单元时）
 
 处理发生在 `dub` 内部、说话人聚类之后、TTS 之前；fit 本身只改文本/时间，
-是否对视频做局部变速由 `video_autorate` 决定。DeepSeek 审校不可用（无 Key/网络
-失败）时，退回规则断句 + fit；以下为 fit 细节。
+是否对视频做局部变速由 `video_autorate` 决定。LLM 审校不可用（本地与 DeepSeek 都不可用
+或网络异常）时，退回规则断句 + fit；以下为 fit 细节。
 
 ### 1. `fit_merge`：合并同一说话人的相邻短句
 
@@ -88,7 +88,7 @@ speaker clustering failed rc=1
 - 判断优先用 `DUBBING_CACHE` 里**这条文本的真实音频时长**（重跑时最准）；
   新行/合并行没有缓存，用固定开销模型预测。
 - 目标：压到 `fit_max_speed`（默认 1.12×）对应的字数。
-- DeepSeek 只返回改写句；术语表命中的词和英文技术词（JSON、GPT、get_completion）
+- LLM 只返回改写句；术语表命中的词和英文技术词（JSON、GPT、get_completion）
   必须保留，丢失则拒绝本次压缩；超过目标会再压一次。
 - `deepseek-flash` 是 reasoning 模型，调用必须
   `extra_body={"thinking":{"type":"disabled"}}` 且 `max_tokens≥512`，
@@ -135,8 +135,8 @@ speaker clustering failed rc=1
 }
 ```
 
-这是默认的 **audio_native** 预设：TTS 原速、视频片段吸收长度差、DeepSeek 审校
-语义单元；`fit_*` 只在没有 DeepSeek 审校结果时兜底。比 beam1/15 的快速配置慢约 17%。
+这是默认的 **audio_native** 预设：TTS 原速、视频片段吸收长度差、LLM 审校
+语义单元；`fit_*` 只在没有 LLM 审校结果时兜底。比 beam1/15 的快速配置慢约 17%。
 
 环境变量：`VTV_FIT_MERGE`、`VTV_FIT_CONDENSE`、`VTV_FIT_FORCE`、
 `VTV_FIT_MAX_SPEED`、`VTV_FIT_MAX_CHARS`、`VTV_FIT_WRAP_WIDTH`、
@@ -250,7 +250,7 @@ fit 兜底历史实测（002，199 句）：中位 0.77×、P90 1.05×、最大 
 日志应有 `[fit] merge N -> M lines`。
 
 **`[fit] condense 0 lines`**
-可能本来就没有 >1.25× 的句子；或 DeepSeek Key 缺失/调用失败（看 warning）；
+可能本来就没有 >1.25× 的句子；或本地 LLM 与 DeepSeek 都不可用/调用失败（看 warning）；
 `deepseek-flash` 的 thinking 没关时 `content` 会为空。
 
 **压缩被拒绝**

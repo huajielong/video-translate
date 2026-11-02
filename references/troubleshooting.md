@@ -74,11 +74,11 @@ GPU 已锁频且 CPU 稳定但 GPT 仍随句数上升时，才考虑 `index_rest
 ## 字幕被切成两段 / 断句不完整
 
 - `prep` 自动跑 `resegment_srt.py`：源 74 → 45 左右，目标显示字幕按 **一行 22 字** 切；
-- `resegment_llm_check=true` 时，DeepSeek 会审校整段并生成 `<target>.tts.srt`
+- `resegment_llm_check=true` 时，LLM（本地优先，DeepSeek 兜底）会审校整段并生成 `<target>.tts.srt`
   （001 实测 80 条一行显示字幕 → 31 个 TTS 语义单元）。日志出现
-  `DeepSeek TTS groups -> ...` 才表示审校生效；
-- 若日志显示 `DeepSeek unavailable` 或 `invalid group list`，会回退规则断句；
-  检查 DeepSeek Key/网络，或临时设 `resegment_llm_check=false`；
+  `<provider> TTS groups -> ...` 才表示审校生效；
+- 若日志显示 `local resegment review failed` / `deepseek ... failed` 或 `invalid group list`，会回退规则断句；
+  检查本地 LLM 服务与 DeepSeek Key/网络，或临时设 `resegment_llm_check=false`；
 - 显示字幕仍按短块烧录，TTS 使用合并后的完整句；两者块数不同是正常的。
 
 ## 字幕超出画面左右边缘（窄画幅 / 竖屏）
@@ -232,7 +232,7 @@ audio_native 下如果仍看到音频变速：
 
 - `fit_merge`：在说话人聚类之后，把同一说话人、间隔 ≤`fit_gap_ms`（默认 500ms）的
   相邻短句合并成一个配音单元，共享固定开销；fit 兜底时每条最多 `fit_max_chars`
-  （默认 44）个汉字。默认 audio_native 用 DeepSeek TTS 语义单元，显示字幕每条
+  （默认 44）个汉字。默认 audio_native 用 LLM TTS 语义单元，显示字幕每条
   一行（22 字），过长拆条；若前一句没有句末标点（被 ASR/翻译切断），间隔 ≤900ms 时
   即使不超速也会合并，避免句中断裂。
 - `fit_condense`：合并后实际/预测仍超过 `fit_condense_speed`（默认 1.25×）的句子，用
@@ -291,7 +291,7 @@ Windows 请把 `rubberband.exe` 放到 PATH 或 `tools/rubberband/`，Linux
 `apt install rubberband-cli`，macOS `brew install rubberband`。`pipeline.py` 会把
 `tools/rubberband/` 加入 PATH。
 
-## DeepSeek Key 验证
+## 在线兜底 Key 验证（可选）
 
 不要用 `GET /models` 验 Key（会假阴性）；用 `trans_cli.py test-channel --channel deepseek` 或直接跑一条翻译。
 

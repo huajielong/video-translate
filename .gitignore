@@ -1,5 +1,6 @@
 # 本机配置与密钥（不要提交）
 /config.json
+/config.json.bak-*
 /config.local.json
 /params.json
 /.env

@@ -29,8 +29,12 @@
 | `subtitle_max_chars` | `22` | 每条显示字幕一行最多汉字数的**上限**；超出拆成多条一行字幕。只作用于 CJK；非中文用 pyVideoTrans 的 `other_len`（默认 60） |
 | `subtitle_fit_frame` | `true` | 按实际帧宽收紧 `subtitle_max_chars`：960x1080 / 640x720 约 14 字，竖屏 1080x1920 约 8 字；16:9 仍是 22 字。关闭后回到固定 22 字（窄画幅会溢出画面） |
 | `subtitle_safety` | `0.95` | 帧宽安全余量（左右各留约 2.5%）；字形或描边仍贴边时调小到 0.9 |
-| `translate_channel` | `deepseek` | 翻译渠道名，见 `channels.md` |
-| `deepseek_model` | `deepseek-flash` | DeepSeek 模型名 |
+| `translate_channel` | `auto` | `auto` = 本地 OpenAI 兼容服务优先、不可用时回退 DeepSeek；`local` = 只用本地；`deepseek` = 强制在线；也可填 `channels.md` 里的其他渠道名 |
+| `local_llm_api` | 空 | 显式指定本地 OpenAI 兼容地址（如 `http://127.0.0.1:8081/v1`）；空 = 自动探测 |
+| `local_llm_model` | 空 | 本地模型名；多模型服务（Ollama）必须填，否则自动探测会跳过它，避免误用小模型 |
+| `local_llm_candidates` | `http://127.0.0.1:8081/v1,http://127.0.0.1:11434/v1` | 自动探测顺序（llama.cpp，然后 Ollama）；`params.json` 的 `localllm_api` 也会作为候选 |
+| `local_llm_timeout` | `1.5` | 单个候选 `/models` 探测超时（秒） |
+| `deepseek_model` | `deepseek-flash` | DeepSeek 模型名（仅在线兜底时使用） |
 | `asr_model` | `large-v3-turbo` | Whisper 模型，见 `models.md` |
 | `sidecar_subs` | `true` | 视频旁有 `.en-us.vtt` / `.en.vtt` / `.en.srt` / `.vtt` 时直接导入，跳过 ASR |
 | `index_api` | `http://127.0.0.1:8791` | IndexTTS2 HTTP API |
@@ -64,7 +68,8 @@
 | `resegment_max_gap_ms` | `900` | 允许合并的相邻字幕间隔 |
 | `resegment_source_max_chars` | `140` | 源语言合并/切分上限（英文按字符） |
 | `resegment_target_max_chars` | `44` | 规则断句时的目标块上限；最终显示按 `subtitle_max_chars` 一行切条 |
-| `resegment_llm_check` | `true` | 规则断句后由 DeepSeek 审校，生成 TTS 语义单元；显示字幕不被拉长 |
+| `resegment_llm_check` | `true` | 规则断句后由 LLM 审校，生成 TTS 语义单元；显示字幕不被拉长 |
+| `resegment_llm_provider` | `auto` | `auto` = 本地审校，调用失败再走 DeepSeek；`local` / `deepseek` 强制其一；`off` 只做规则断句 |
 | `duration_tol_s` | `15` | 绝对时长容差下限；`video_autorate` 下 QC 还会按 `max_video_speedup_rate` / `max_video_pts_rate` 放宽上下界 |
 | `dubb_min_pause_ms` | `200` | 关闭 `video_autorate`、退回音频填缝时每句至少保留的停顿毫秒数 |
 | `dubb_natural_pause_ms` | `600` | 关闭 `video_autorate` 时的自然短停顿；空档不超过它保持原速，超过才放慢填缝 |
@@ -82,7 +87,7 @@
 | `glossary` | `assets/glossary.txt` | 术语表，`原文=译文` 每行一条 |
 
 > 默认是 **audio_native** 预设：`voice_autorate=false`、TTS 原速、
-> `video_autorate=true`、句间目标停顿 300ms、QC 容差 15s；DeepSeek 审校生成
+> `video_autorate=true`、句间目标停顿 300ms、QC 容差 15s；LLM 审校生成
 > TTS 语义单元，显示字幕每条一行。比 beam1/15 的快速配置慢约 17%，换取更丰富的
 > 情感和更自然的语速。
 > `fit_*` 默认值只对中文 + IndexTTS2 标定；换后端/音色/语言后用
@@ -101,7 +106,8 @@
 2. 托管安装（`<vendor 根>`，默认在技能目录外）时安装依赖与模型；外部安装
    （`--reuse-pvt` / `--reuse-itt`）只跳过安装。
 3. 写 `<pyvideotrans_home>/videotrans/params.json`：
-   - `translate_type=5`（DeepSeek）
+   - `translate_type=9`（探测到本地 LLM 时）或 `5`（DeepSeek）
+   - 本地可用时写 `localllm_api` / `localllm_model` / `localllm_key`
    - `deepseek_key`（来自 `--deepseek-key` 或 `DEEPSEEK_API_KEY`；已有值会保留）
    - `deepseek_model`
    - `tts_type=12`（index 后端）或 `1`（qwen3local）
@@ -110,9 +116,32 @@
 
 > `params.json` 只保存在本机，不要提交或随包分发。
 
+## 本地优先 / DeepSeek 兜底
+
+`translate_channel=auto`（默认）时，`prep` / `run` 会先探测本地 OpenAI 兼容服务：
+
+1. `VTV_LOCAL_LLM_API`（环境变量，最高优先级）
+2. `config.json` 的 `local_llm_api`
+3. `local_llm_candidates`（默认 llama.cpp `:8081`，然后 Ollama `:11434`）
+4. `params.json` 的 `localllm_api`
+
+探测方式是 `GET <base>/models`。单模型服务（llama.cpp 的 `llama-server`）直接使用；
+多模型服务（Ollama）必须用 `local_llm_model` / `VTV_LOCAL_LLM_MODEL` 指定模型，
+否则会跳过该候选，避免静默选到 4B 之类的小模型。命中后：
+
+- MT 走本地；断句审校（`resegment_llm_provider=auto`）也先走本地，调用失败或
+  输出校验不通过才切 DeepSeek；`polish` 同样本地优先。
+- 单个视频本地 MT 失败时会用 DeepSeek 重试一次；本地全部不可达时才用 DeepSeek。
+  两者都没有时 `prep`/`run` 直接报错，不会悄悄产出未翻译的成品。
+- `translate_channel=local` 表示只用本地，不回退在线。
+
+> llama.cpp / Ollama 加载模型后占用大量显存，与 IndexTTS2 互斥：先 `prep`（本地
+> LLM 在线），停掉本地服务，再 `dub`/`run`（MT 命中缓存，只做 TTS）。`dub` 阶段
+> 不会再触发本地翻译渠道的自动启动。
+
 ## DeepSeek Key
 
-Key 不在 `config.json`，而在 pyVideoTrans 的：
+只有本地 LLM 不可用时才需要。Key 不在 `config.json`，而在 pyVideoTrans 的：
 
 ```text
 <pyvideotrans_home>/videotrans/params.json
@@ -138,7 +167,12 @@ python scripts/pipeline.py setup
 
 | 变量 | 作用 |
 |---|---|
-| `DEEPSEEK_API_KEY` | `setup` 读取；`doctor` 也用它判断 Key 是否存在 |
+| `DEEPSEEK_API_KEY` | `setup` 读取；`doctor` 也用它判断在线兜底 Key 是否存在 |
+| `VTV_LOCAL_LLM_API` / `VTV_LOCAL_LLM_MODEL` | 覆盖本地 OpenAI 兼容地址/模型；优先于 `config.json` |
+| `VTV_LOCAL_LLM_TIMEOUT` | 覆盖单候选探测超时（秒） |
+| `VTV_RESEGMENT_API` / `VTV_RESEGMENT_MODEL` / `VTV_RESEGMENT_KEY` | `pipeline.py` 逐个 provider 传给 `resegment_check.py`，不要手工设置 |
+| `VTV_RESEGMENT_TIMEOUT` | 断句审校请求超时（秒，默认 180） |
+| `VTV_POLISH_API` / `VTV_POLISH_MODEL` / `VTV_POLISH_KEY` | `pipeline.py polish` 传给 `polish_srt.py`，不要手工设置 |
 | `PYVIDEOTRANS_HOME` | `pipeline.py` 为子进程设置，指向配置的 pyVideoTrans |
 | `INDEXTTS2_HOME` | `pipeline.py` 为子进程设置，指向配置的 IndexTTS2 |
 | `INDEXTTS2_FAST` | `serve` 由 `index_fast` 设置；`1` = beam 1 |

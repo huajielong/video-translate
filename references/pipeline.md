@@ -6,8 +6,8 @@
 源视频
   │
   ├─ prep: ASR (faster-whisper large-v3-turbo) 或旁路字幕（.en-us.vtt/.en.vtt/.en.srt）→ en.srt
-  │        源重断句（resegment_srt）→ MT (DeepSeek + glossary + context) → zh-cn.srt
-  │        目标重断句 → DeepSeek 审校（resegment_llm_check）→ zh-cn.tts.srt
+  │        源重断句（resegment_srt）→ MT (本地 LLM / DeepSeek + glossary + context) → zh-cn.srt
+  │        目标重断句 → LLM 审校（resegment_llm_check，本地优先）→ zh-cn.tts.srt
   │        （TTS 语义单元；显示字幕仍是规则短块）
   │
   ├─ dub: vtv --no-clear-cache（预置 en.srt / zh-cn.srt，跳过 ASR/MT）
@@ -28,11 +28,11 @@
 
 - `resegment_srt.py` 合并源碎句、按标点/长度重切；源合并上限
   `resegment_source_max_chars`（140），目标规则块上限 `resegment_target_max_chars`（44）。
-- `resegment_llm_check=true` 时，`resegment_check.py` 把整段字幕交给 DeepSeek，
+- `resegment_llm_check=true` 时，`resegment_check.py` 把整段字幕交给 LLM（本地优先，失败回退 DeepSeek），
   只允许合并相邻块或轻微压缩，不改事实/数字/术语；结果写成 `<target>.tts.srt`。
 - 显示字幕按 `subtitle_max_chars`（22 个汉字，窄画幅由 `subtitle_fit_frame` 按帧宽收紧）
   切成一行的短块；TTS 使用完整语义单元，
-  两者块数不同是正常的。DeepSeek 失败时自动回退规则断句。
+  两者块数不同是正常的。本地与 DeepSeek 都失败时自动回退规则断句。
 - 有 `.tts.srt` 时 `pipeline.py` 通过 `VTV_TTS_SRT` 传给 dub，`_stage_align.py`
   会从最终音画时间轴重新生成显示字幕，不会用 TTS 单元覆盖显示 SRT。
 
@@ -70,7 +70,7 @@
 | 阶段 | 并发 | 说明 |
 |---|---|---|
 | ASR | 1 | large-v3-turbo 约 4 GB 显存 |
-| 翻译 | `mt_workers`（默认 4） | 纯网络等待；DeepSeek 限流时调低 |
+| 翻译 | `mt_workers`（默认 4） | 纯网络等待；本地单卡建议 1，DeepSeek 限流时调低 |
 | IndexTTS2 配音 | 1 | 守护进程单 worker；多开只会排队 |
 | Qwen3-TTS 配音 | 1–2 | 每实例 3–4 GB；本机实测太慢，默认不用 |
 | 后处理/QC | 可与下一片配音重叠 | ffmpeg/CPU |
@@ -96,7 +96,7 @@ trans_cli.py vtv <src> --source en --target zh-cn \
   --extra-args=--video_autorate
 ```
 
-- 预置文件必须是 `<outdir>/en.srt` 与 `<outdir>/zh-cn.srt`；有 DeepSeek 审校结果时
+- 预置文件必须是 `<outdir>/en.srt` 与 `<outdir>/zh-cn.srt`；有 LLM 审校结果时
   再把 `<target>.tts.srt` 传给 dub（`pipeline.py` 用 `VTV_TTS_SRT`）。
 - `--overwrite` 让包装脚本接受非空目录；`--no-clear-cache` 阻止上游删除目录。
 - 默认 audio_native 只传 `--video_autorate`，**不要**再传 `--voice_autorate`。

@@ -36,13 +36,29 @@ def to_srt(items: list[dict]) -> str:
     return "\n\n".join(f"{i}\n{it['time']}\n{it['text']}" for i, it in enumerate(items, 1)) + "\n"
 
 
-def load_key(model: str, params_path: str) -> tuple[str, str]:
-    key = os.environ.get("DEEPSEEK_API_KEY", "")
-    if not key and params_path and Path(params_path).exists():
+def load_key(model: str, params_path: str) -> tuple[str, str, str]:
+    """Resolve endpoint/key/model; pipeline.py passes VTV_POLISH_*.
+
+    Default order mirrors the pipeline: a configured local server first,
+    DeepSeek only when no local endpoint is set.
+    """
+    key = os.environ.get("VTV_POLISH_KEY", "")
+    base = os.environ.get("VTV_POLISH_API", "")
+    model = os.environ.get("VTV_POLISH_MODEL", "") or model
+    data = {}
+    if params_path and Path(params_path).exists():
         data = json.loads(Path(params_path).read_text(encoding="utf-8"))
-        key = data.get("deepseek_key", "")
-        model = model or data.get("deepseek_model", "")
-    return key, model or "deepseek-flash"
+    if not base:
+        local_api = str(data.get("localllm_api") or "")
+        if local_api and ("127.0.0.1" in local_api or "localhost" in local_api):
+            base = local_api
+            if not key:
+                key = "local"
+            model = model or str(data.get("localllm_model") or "")
+    if not key:
+        key = os.environ.get("DEEPSEEK_API_KEY", "") or data.get("deepseek_key", "")
+    model = model or data.get("deepseek_model", "")
+    return key, model or "deepseek-flash", (base or "https://api.deepseek.com/v1").rstrip("/")
 
 
 def load_glossary(path: str) -> str:
@@ -52,7 +68,8 @@ def load_glossary(path: str) -> str:
                      if l.strip() and "=" in l)
 
 
-def review(batch: list[dict], key: str, model: str, glossary: str) -> list[dict]:
+def review(batch: list[dict], key: str, model: str, glossary: str,
+           base: str) -> list[dict]:
     src = to_srt(batch)
     prompt = f"""你是字幕翻译审校。请只润色下面 SRT 片段中的目标语言文本：
 1. 保持每个块的序号和时间轴完全不变；
@@ -74,7 +91,7 @@ def review(batch: list[dict], key: str, model: str, glossary: str) -> list[dict]
         "stream": False,
     }).encode("utf-8")
     req = urllib.request.Request(
-        "https://api.deepseek.com/v1/chat/completions", data=payload, method="POST",
+        base + "/chat/completions", data=payload, method="POST",
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
     with urllib.request.urlopen(req, timeout=300) as resp:
         data = json.loads(resp.read().decode("utf-8"))
@@ -97,15 +114,15 @@ def main() -> int:
     args = ap.parse_args()
 
     items = parse_srt(Path(args.srt).read_text(encoding="utf-8-sig"))
-    key, model = load_key(args.model, args.params)
+    key, model, base = load_key(args.model, args.params)
     if not key:
-        raise SystemExit("no DeepSeek key: set DEEPSEEK_API_KEY or pass --params")
+        raise SystemExit("no LLM endpoint: start a local server or set DEEPSEEK_API_KEY")
     glossary = load_glossary(args.glossary)
     changed = 0
     for start in range(0, len(items), BATCH):
         batch = items[start:start + BATCH]
         try:
-            got = review(batch, key, model, glossary)
+            got = review(batch, key, model, glossary, base)
         except Exception as exc:  # noqa: BLE001
             print(f"batch {start//BATCH+1}: keep original ({exc})")
             continue

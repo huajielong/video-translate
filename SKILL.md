@@ -14,9 +14,19 @@ description: Translates and dubs videos into another language while cloning the 
 
 从 GitHub 下载后第一次执行时，先不要直接 `run`；先向用户确认下面两件事。
 
-**1. DeepSeek Key**
+**1. 翻译/审校后端（默认本地优先）**
 
-Key 不在 `config.json`，而在：
+`translate_channel=auto`（默认）会在 `prep` / `run` 开始前探测本地 OpenAI 兼容服务：
+先看 `local_llm_api` / `VTV_LOCAL_LLM_API`，再试 `local_llm_candidates`（默认
+llama.cpp `:8081`、Ollama `:11434`），最后看 `params.json` 的 `localllm_api`。
+本地可用时，MT、断句审校（`resegment_llm_provider=auto`）和 `polish` 都走本地；
+只有本地全部不可达时才回退 DeepSeek。
+
+多模型服务（如 Ollama）必须用 `local_llm_model` / `VTV_LOCAL_LLM_MODEL` 指定模型；
+否则自动探测会跳过它，避免静默选到 4B 这类不适合翻译的小模型。单模型服务
+（llama.cpp `llama-server`）无需指定。
+
+本地不可用时才需要 DeepSeek Key。Key 不在 `config.json`，而在：
 
 ```text
 <pyvideotrans_home>/videotrans/params.json
@@ -31,8 +41,9 @@ python scripts/pipeline.py setup --deepseek-key "sk-..."
 ```
 
 模板是根目录 `params.example.json`。**不要让用户把 Key 发到聊天里**，也不要把它写进
-`SKILL.md`、README、`config.json` 或提交到 Git。Key 缺失时 `run` / `prep` 会提前
-退出并打印配置路径，`doctor` 也会给出提醒。
+`SKILL.md`、README、`config.json` 或提交到 Git。本地与 Key 都不可用时 `run` / `prep`
+会提前退出并说明原因，`doctor` 会分别列出本地探测结果和 Key 状态。`translate_channel=local`
+表示只用本地、不回退在线。
 
 **2. 关键参数**
 
@@ -46,7 +57,8 @@ python scripts/pipeline.py setup --deepseek-key "sk-..."
 | `max_video_speedup_rate` | `1.25` | 想保留更多停顿就调小 |
 | `max_phrase_pause_ms` | `300` | 句间空白仍长/太紧时调整 |
 | `duration_tol_s` | `15` | QC 时长容差的绝对下限 |
-| `resegment_llm_check` | `true` | 无 DeepSeek/审校失败时说明会回退 |
+| `translate_channel` | `auto` | `auto` 本地优先、DeepSeek 兜底；`local` 只用本地；`deepseek` 强制在线 |
+| `resegment_llm_check` / `resegment_llm_provider` | `true` / `auto` | 本地审校失败会回退 DeepSeek，再失败回退规则断句 |
 | `clone_ref_mode` | `line` | 多说话人/音色稳定需求时确认 |
 | `glossary` | `assets/glossary.txt` | 换课程/领域必须换术语表 |
 
@@ -81,7 +93,8 @@ python scripts/batch_courses.py run --manifest courses.json   # 多课程：prep
 
 运行时（`<vendor 根>`）、模型、checkpoints、`config.json` 和 API Key 都不随仓库分发；
 安装与许可证见根目录 `README.md`、`THIRD_PARTY_NOTICES.md`。
-DeepSeek Key 只写在本机 `<pyvideotrans_home>/videotrans/params.json`
+本地 LLM 地址在 `config.json` 的 `local_llm_*`（或 `params.json` 的 `localllm_*`）；
+需要在线兜底时，DeepSeek Key 只写在本机 `<pyvideotrans_home>/videotrans/params.json`
 （模板 `params.example.json`），不在 `config.json`。
 
 产物：`<out>/<原名><final_suffix>.mp4`、`<out>/_字幕/<原名>.{源,目标}.srt`、`<out>/QC_SUMMARY.md`。
@@ -94,7 +107,8 @@ Windows 后台/Agent 运行用 `pythonw scripts/pipeline.pyw <command>`：解释
 
 1. `doctor` → `serve` → `run --src ... --out ...`；失败重跑同一命令，阶段和逐句配音会命中缓存。
 2. `prep` 先合并源碎句，翻译后按句重切；`resegment_llm_check=true` 时把整段字幕交给
-   DeepSeek 审校，输出 `<target>.tts.srt` 作为 TTS 语义单元；显示字幕另按一行切条。
+   LLM 审校（`resegment_llm_provider=auto`：本地优先，失败回退 DeepSeek），输出
+   `<target>.tts.srt` 作为 TTS 语义单元；显示字幕另按一行切条。
 3. TTS 保持**绝对原速**；音频长于槽位时慢放视频片段，短于槽位时把视频最多加快
    `max_video_speedup_rate`（1.25×）到“音频 + `max_phrase_pause_ms`（300ms）”。
 4. 每个 TTS 单元边缘精确裁到首/末非静音，20ms 淡入淡出，前后各加 80ms 纯静音预滚，
@@ -117,7 +131,7 @@ Windows 后台/Agent 运行用 `pythonw scripts/pipeline.pyw <command>`：解释
 | 多人/音色变化大 | 保持 `clone_ref_mode=line`；只要音色稳可用 `cluster` |
 | 句间空白仍偏长 | 调大 `max_video_speedup_rate` 或调小 `max_phrase_pause_ms` |
 | 想保留更多原片停顿 | 调小 `max_video_speedup_rate` 或调大 `max_phrase_pause_ms` |
-| 无 DeepSeek / 审校失败 | 自动回退规则断句 + `fit_*`；也可设 `resegment_llm_check=false` |
+| 本地与 DeepSeek 都不可用 / 审校失败 | 自动回退规则断句 + `fit_*`；也可设 `resegment_llm_check=false` |
 | 换课程/领域 | 换对应的 `--glossary`（或 `assets/glossary.txt`），否则 QC 术语命中率会按旧词表误判 |
 | 换 TTS 后端/音色/语言 | 先试听，再按 `references/audio-fit.md` 重新标定 `fit_pred_a/b` |
 
@@ -151,9 +165,10 @@ IndexTTS2 服务本身的 API/音色/情感文档在 `<index_tts2_home>/referenc
 
 `index` 克隆后端、硬字幕（每条显示一行，22 字上限并按帧宽收紧）、`en → zh-cn`、`mt_workers=4`、
 AAC 48 kHz、-18 LUFS、术语表 `assets/glossary.txt`。软字幕用 `--subtitle soft`。
+翻译与审校默认 `auto`：本地 LLM 优先，本地不可用才用 DeepSeek。
 语言不写死：`--source` / `--target` / `--glossary` 均可配置。
 视频旁有 `.en-us.vtt` / `.en.vtt` / `.en.srt` 时直接导入，跳过 ASR（`sidecar_subs=true`）。
-默认 **audio_native（声音优先）**：翻译前后 `resegment` 重断句，DeepSeek 审校后把
+默认 **audio_native（声音优先）**：翻译前后 `resegment` 重断句，LLM 审校后把
 完整句作为 TTS 语义单元（显示字幕仍是短块）；`voice_autorate=false` 保持 TTS 原速，
 `video_autorate=true` 用视频片段 PTS 吸收长度差：音频短时最多加快 1.25× 并保留
 `max_phrase_pause_ms=300`，QC 时长上下界由视频变速上限决定、`duration_tol_s=15` 是绝对下限。`fit_merge`/`fit_condense`

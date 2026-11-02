@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-11-02
+
+- Local-first LLM backends. `translate_channel=auto` (new default) probes
+  OpenAI-compatible servers before every `prep`/`run`: `local_llm_api` /
+  `VTV_LOCAL_LLM_API`, then `local_llm_candidates` (llama.cpp `:8081`, Ollama
+  `:11434`), then `params.json:localllm_api`. A single-model server is used
+  directly; multi-model servers require `local_llm_model`.
+- If local MT fails for a video, `mt_one` retries once with DeepSeek in `auto`
+  mode (explicit `local` never calls the online API).
+- Resegment review and `polish` follow the same order
+  (`resegment_llm_provider=auto`): local, then DeepSeek, then rule-based cues.
+  `resegment_check.py` accepts `VTV_RESEGMENT_API/_MODEL/_KEY`, omits
+  DeepSeek-only fields for local endpoints, retries once without
+  `response_format`, and exits 3/4 so the pipeline can try the next provider.
+- LLM TTS groups longer than `resegment_target_max_chars` are split at sentence
+  boundaries with proportional timing instead of becoming one oversized unit.
+- `dub` passes `--no-auto-ollama` when the local channel is selected, so the
+  wrapper cannot start Ollama and compete with IndexTTS2 for VRAM.
+- `doctor` reports the probed local LLM and the resolved MT backend; missing
+  DeepSeek keys are only an error when no local LLM is available.
+
 ## 2026-10-30
 
 - Add `scripts/audio_probe.py` for isolated "crackle" inside a word:

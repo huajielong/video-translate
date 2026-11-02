@@ -7,15 +7,16 @@
 
 ## 特性
 
-- 翻译前后语义重断句，DeepSeek 审校后生成 TTS 语义单元；显示字幕保持一行，上限按视频帧宽动态收紧（16:9 为 22 字，960x1080/640x720 约 14 字）。
+- 翻译与断句审校默认**本地优先**：先探测 llama.cpp / Ollama 等 OpenAI 兼容服务，本地不可用才回退 DeepSeek。
+- 翻译前后语义重断句，LLM 审校后生成 TTS 语义单元；显示字幕保持一行，上限按视频帧宽动态收紧（16:9 为 22 字，960x1080/640x720 约 14 字）。
 - TTS 绝对原速；音频长于槽位时慢放视频片段，短于槽位时最多加快 1.25×，目标停顿 300ms。
 - 每个 TTS 单元精确裁边、20ms 淡入淡出、前后 80ms 纯静音，减少句间“嗖”声。
 - 逐句配音缓存、断点续跑、QC 汇总。
 - Windows 下可用 `pythonw` 无窗口运行，避免 cmd / conhost 闪窗。
 
-> **首次使用**：先配置 DeepSeek Key（写入 `params.json`，模板见
-> `params.example.json`），确认 `source_lang` / `target_lang`、`subtitle_mode`、
-> `glossary` 等关键参数，再运行 `doctor`。Key 缺失时 `run`/`prep` 会提前退出并提示。
+> **首次使用**：先确认本地 LLM 或 DeepSeek Key 至少有一个可用（本地优先，见下文
+> “本地 LLM”），再确认 `source_lang` / `target_lang`、`subtitle_mode`、`glossary`
+> 等关键参数，最后运行 `doctor`。两者都不可用时 `run`/`prep` 会提前退出并说明原因。
 
 ## 环境要求
 
@@ -26,8 +27,8 @@
 | RAM / 磁盘 | ≥16GB RAM；≥20GB 空闲磁盘 |
 | Python | 3.10+ |
 | 工具 | uv、ffmpeg、Rubberband |
-| 网络 | 能访问 PyPI / Hugging Face / ModelScope；DeepSeek API |
-| API | DeepSeek API Key（只写入本机 `params.json`） |
+| 网络 | 能访问 PyPI / Hugging Face / ModelScope；在线兜底时需访问 DeepSeek API |
+| API | 本地 OpenAI 兼容服务（优先）或 DeepSeek Key（兜底，只写入本机 `params.json`） |
 
 模型权重由 `setup` 下载，不随仓库分发。
 
@@ -150,9 +151,35 @@ Windows 后台 / Agent 场景：
 pythonw scripts/pipeline.pyw run --src "D:/videos" --out "D:/translated"
 ```
 
-## DeepSeek API Key
+## 本地 LLM（优先）
 
-Key **不存在** `config.json`，而是写到 pyVideoTrans 的
+`translate_channel=auto`（默认）会按顺序探测：
+
+1. `VTV_LOCAL_LLM_API` / `local_llm_api`
+2. `local_llm_candidates`：默认 `http://127.0.0.1:8081/v1`（llama.cpp），
+   然后 `http://127.0.0.1:11434/v1`（Ollama）
+3. `params.json` 的 `localllm_api`
+
+判定方式是 `GET <base>/models`。单模型服务（`llama-server`）直接使用；多模型服务
+（Ollama）需用 `local_llm_model` 或 `VTV_LOCAL_LLM_MODEL` 指定模型，否则跳过，
+避免误用小模型。命中后 MT、断句审校、`polish` 都走本地。
+
+```jsonc
+// config.json
+{
+  "translate_channel": "auto",
+  "local_llm_api": "",                          // 空 = 自动探测
+  "local_llm_model": "qwen3.6:35b-a3b-mtp-q4_K_M",
+  "local_llm_candidates": "http://127.0.0.1:8081/v1,http://127.0.0.1:11434/v1"
+}
+```
+
+> 本地 LLM 与 IndexTTS2 会争显存。批量流程：`prep`（本地 LLM 在线）→ 停本地
+> 服务 → `dub` / `run`（MT 命中缓存，只做 TTS）→ 下一门课再启动本地服务。
+
+## DeepSeek API Key（本地不可用时兜底）
+
+只有本地 LLM 全部不可达时才需要。Key **不存在** `config.json`，而是写到 pyVideoTrans 的
 `params.json`：
 
 ```text
@@ -205,7 +232,8 @@ cp config.example.json config.json
 - `max_video_speedup_rate=1.25`、`max_phrase_pause_ms=300`。
 - `subtitle_mode=hard` 或 `soft`。
 - `subtitle_max_chars=22`（CJK 上限；`subtitle_fit_frame=true` 会按帧宽收紧到约 8–22 字）。
-- `resegment_llm_check=true`：DeepSeek 审校断句。
+- `translate_channel=auto`：本地 LLM 优先，DeepSeek 兜底；`local` 只用本地。
+- `resegment_llm_check=true`、`resegment_llm_provider=auto`：LLM 审校断句，本地优先。
 - `duration_tol_s=15`：QC 时长容差的绝对下限。
 
 完整配置见 [`references/configuration.md`](references/configuration.md)。
@@ -215,7 +243,7 @@ cp config.example.json config.json
 - 主要开发和验证环境是 Windows 11 + NVIDIA GPU；Linux 可跑但未完整回归，macOS 未验证。
 - IndexTTS2 是单 worker，不能并行跑两条配音任务。
 - 双语字幕保持源/目标 1:1 配对，不做单语字幕的一行二次切分。
-- DeepSeek 不可用时回退规则断句 + fit；显示字幕仍会按一行切条。
+- 本地 LLM 与 DeepSeek 都不可用时回退规则断句 + fit；显示字幕仍会按一行切条。
 - 开源仓库不附带课程视频、字幕、模型或 API Key。
 
 ## 许可证
