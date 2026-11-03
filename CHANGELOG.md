@@ -23,6 +23,9 @@
 - README refreshed: batch workflow, prep gate, chunked audit, cleanup, docs
   index; `references/deployment.md` documents PowerShell process lookup for
   Windows (Git Bash `pgrep`/`kill -0` cannot see Windows PIDs).
+- README adds a before/after demo from a translated course: side-by-side GIF
+  (`assets/demo/before-after.gif`) and a 16s audio comparison MP4; `.gitignore`
+  whitelists `assets/demo/`.
 
 ## 2026-11-02
 

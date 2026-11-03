@@ -1,95 +1,80 @@
+<div align="center">
+
 # video-translate
 
-可迁移的视频翻译 / 克隆配音技能：**ASR → 翻译 → 克隆配音 → 对齐/合成 → 响度归一化 → QC**。
+**一条命令，把英文课程视频变成中文配音成片**
 
-适合单条视频或整批课程翻译。默认英文 → 中文，克隆原说话人音色，输出硬字幕或软字幕。
-技能入口和完整规则见 [`SKILL.md`](SKILL.md)。
+克隆原说话人音色 · 逐句语义重断句 · 音画自动对齐 · 失败可断点续跑
 
-## 特性
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#环境要求)
 
-- 翻译与断句审校默认**本地优先**：先探测 llama.cpp / Ollama 等 OpenAI 兼容服务，本地不可用才回退 DeepSeek。
-- 翻译前后语义重断句，LLM 审校后生成 TTS 语义单元；长片按 ≤90 条字幕分块审校
-  （`resegment_chunk_cues`），不会因单次输出被截断而整条退回规则断句。
-- 显示字幕保持一行，上限按视频帧宽动态收紧（16:9 为 22 字，960x1080/640x720 约 14 字）。
-- TTS 绝对原速；音频长于槽位时慢放视频片段，短于槽位时最多加快 1.25×，目标停顿 300ms。
-- 每个 TTS 单元精确裁边、20ms 淡入淡出、前后 80ms 纯静音，减少句间“嗖”声。
-- 逐句配音缓存、断点续跑、QC 汇总。
-- **批量课程**：`prep` 多课并行、`dub` 串行（IndexTTS2 单 worker），QC 自动归档，
-  支持 `status` 进度与 `clean` 交付后清理。
-- **prep 门禁**：`prep_check.py` 在开始耗时的配音前检查字幕齐全性、术语命中率和
-  TTS 单元长度；子代理声称“完成”时可用它机械核验。
-- Windows 下可用 `pythonw` 无窗口运行，避免 cmd / conhost 闪窗。
+</div>
 
-> **首次使用**：先确认本地 LLM 或 DeepSeek Key 至少有一个可用（本地优先，见下文
-> “本地 LLM”），再确认 `source_lang` / `target_lang`、`subtitle_mode`、`glossary`
-> 等关键参数，最后运行 `doctor`。两者都不可用时 `run`/`prep` 会提前退出并说明原因。
+---
 
-## 环境要求
+## 效果演示
 
-| 项 | 推荐 |
+同一时刻的原始画面与译制画面并排对照：右侧为中文配音（克隆原说话人音色）并烧录一行式中文字幕。
+
+![翻译前后对比](assets/demo/before-after.gif)
+
+[观看带音频的对比片段](assets/demo/before-after.mp4)（16 秒：前 8 秒英文原声，后 8 秒中文配音）
+
+> 示例截取自课程《面向 AI Agent 与应用的语音技术》Introduction，仅用于展示译制效果。
+
+---
+
+## 为什么需要它
+
+把一门英文课程翻译成中文并不难，难的是**译得准、听着像人、音画对得上、几十条视频能一次跑完**。常见做法要么音色机械，要么字幕和语音各说各的，要么跑到第 30 条崩了从头再来。
+
+video-translate 把这些环节串成一条可重入的流水线：
+
+| 你遇到的痛点 | 这里的解法 |
 |---|---|
-| OS | Windows 11 优先；Linux x86_64 可用但未完整验证；macOS 未验证 |
-| GPU | NVIDIA，≥12GB 显存（IndexTTS2 约 7.6GB） |
-| RAM / 磁盘 | ≥16GB RAM；≥20GB 空闲磁盘 |
-| Python | 3.10+ |
-| 工具 | uv、ffmpeg、Rubberband |
-| 网络 | 能访问 PyPI / Hugging Face / ModelScope；在线兜底时需访问 DeepSeek API |
-| API | 本地 OpenAI 兼容服务（优先）或 DeepSeek Key（兜底，只写入本机 `params.json`） |
+| 机器配音音色全变，"一听就是 AI" | IndexTTS2 零样本克隆**原说话人音色**，逐句用原片作参考 |
+| 翻译后句子长短不一，字幕和语音对不上 | 翻译前后各做一次**语义重断句**；TTS 按完整句合成，显示字幕独立切条 |
+| 配音语速忽快忽慢，句间大段空白 | TTS **绝对原速**；音频长则慢放视频片段，短则最多 1.25× 追平，句间保留 300ms |
+| 长视频跑一半失败，只能全部重来 | 阶段级 + 逐句配音缓存，**重跑同一命令即续跑** |
+| 几十上百条视频只能人工排期盯守 | manifest 批量：`prep` 多课并行、配音严格串行、QC 自动归档 |
+| 交付前只能靠人耳逐条听 | QC 自动核对时长、字幕行宽、术语命中与音画同步，输出汇总报告 |
 
-模型权重由 `setup` 下载，不随仓库分发。
+## 核心能力
 
-## 首次使用：自动下载第三方内容
+- **翻译与审校本地优先**：自动探测 llama.cpp / Ollama 等 OpenAI 兼容服务，本地不可用才回退 DeepSeek；长片按 ≤90 条字幕分块审校，不会被单次输出截断打回规则断句。
+- **一行式显示字幕**：每条字幕保持一行，上限随视频帧宽自动收紧（16:9 为 22 字，960×1080 约 14 字，竖屏约 8 字）。
+- **精确的句间节奏**：每个 TTS 单元精确裁边、20ms 淡入淡出、前后各 80ms 纯静音，减少句间"嗖"声与句内"咔哒"。
+- **可迁移、可恢复**：逐句配音缓存 + 分阶段执行，换机器、换目录、中断后都能接着跑。
+- **批量课程工作流**：`prep` 并行、`run` 串行（IndexTTS2 单 worker），QC 自动归档，`status` 看进度，`clean` 交付后清理中间文件。
+- **prep 门禁**：开始耗时的配音前，机械校验字幕齐全性、术语命中率和 TTS 单元长度——子代理声称"完成"时可用它核验。
+- **Windows 友好**：`pythonw` 无窗口运行，避免 cmd / conhost 闪窗。
 
-为了保持仓库干净并尊重第三方许可证，本仓库**不包含**：
+## 工作原理
 
 ```text
-<vendor 根>/pyvideotrans      # 默认 %LOCALAPPDATA%\video-translate\vendor
-<vendor 根>/index-tts2-cli
-tools/rubberband
-模型权重、checkpoints、venv
-config.json / params.json / 任何 API Key
-课程视频、字幕、输出目录
+输入视频（可带 sidecar 字幕）
+   │
+   ├─ ASR ───────────── 无字幕时用 Whisper large-v3-turbo 识别
+   ├─ 语义重断句 ────── 合并碎句、翻译、按句子重切
+   ├─ 断句审校 ──────── LLM 输出 <target>.tts.srt 作为 TTS 语义单元
+   ├─ 克隆配音 ──────── IndexTTS2 逐句克隆原说话人音色
+   ├─ 对齐 / 合成 ───── 视频 PTS 变速吸收长度差，句间 300ms 停顿
+   ├─ 响度归一化 ────── loudnorm 统一到 -18 LUFS
+   └─ QC ────────────── 时长 / 字幕 / 术语 / 同步 → QC_SUMMARY.md
 ```
 
-运行时默认装在**技能目录之外**（Agent 会把整个技能目录镜像复制）；换盘用
-`VTV_VENDOR_DIR` 或 `setup --vendor-dir DIR`。
+显示字幕与 TTS 单元是两套产物：**TTS 按完整句合成**（自然、少断点），**显示字幕按一行切条**（易读）。二者块数不同属正常现象。
 
-但**首次使用会自动下载并安装**：
+## 快速开始
 
-1. `setup`（以及缺失时的 `run` / `dub` / `serve` / `prep`）会：
-   - clone **pyVideoTrans v4.16**，应用 `patches/pyvideotrans.patch`；
-   - clone **IndexTTS2 v2.0.0**，叠加 `wrapper/index-tts2-cli/` 的 CLI wrapper，
-     应用 `patches/index-tts.patch`；
-   - 调用现有 `setup` 创建 venv、下载 Whisper / IndexTTS2 模型和 checkpoints。
-2. 需要本机有 **git**、网络和约 **20GB+** 空闲磁盘。
-3. 不想自动下载时设 `VTV_AUTO_INSTALL=0`，改用已有安装：
-
-```bash
-python scripts/pipeline.py setup \
-  --reuse-pvt /path/to/pyvideotrans \
-  --reuse-itt /path/to/index-tts2-cli
-```
-
-4. **Rubberband** 是可选的（缺失时退回 pydub/ffmpeg）；Windows 可放到
-   `tools/rubberband/` 或 PATH，Linux `apt install rubberband-cli`，macOS
-   `brew install rubberband`。
-
-补丁和 wrapper 的版本、许可证见 [`patches/README.md`](patches/README.md)、
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。IndexTTS2 不是 OSI 开源许可证；
-商用或大规模使用前请确认上游条款。
-
-## 安装
-
-### Claude Code
+### 1. 安装
 
 ```bash
 git clone https://github.com/huajielong/video-translate.git \
   ~/.claude/skills/video-translate
 cd ~/.claude/skills/video-translate
-
-# 首次运行会自动下载 pyVideoTrans / IndexTTS2 并安装模型
-python scripts/pipeline.py setup
-python scripts/pipeline.py doctor
 ```
 
 Windows PowerShell：
@@ -98,77 +83,69 @@ Windows PowerShell：
 git clone https://github.com/huajielong/video-translate.git `
   "$env:USERPROFILE\.claude\skills\video-translate"
 cd "$env:USERPROFILE\.claude\skills\video-translate"
-python scripts\pipeline.py setup
-python scripts\pipeline.py doctor
 ```
 
-也可以把本目录放到项目的 `.claude/skills/video-translate` 作为项目级技能。
-如果发布为 Claude Code 插件，再补 `.claude-plugin/plugin.json`；直接目录安装不需要。
+也可以把本目录放到项目的 `.claude/skills/video-translate` 作为项目级技能；仓库内的 `install.sh` / `install.ps1` 提供不带 `.git`、`vendor` 的安装副本。
 
-### Codex
+其他 Agent（如 Codex）读取仓库根目录的 [`AGENTS.md`](AGENTS.md)，其中已包含命令、约束与执行规则。
 
-Codex 读取仓库根目录的 [`AGENTS.md`](AGENTS.md)。克隆到任意目录：
+### 2. 初始化并自检
 
 ```bash
-git clone https://github.com/huajielong/video-translate.git
-cd video-translate
+python scripts/pipeline.py setup    # 首次：拉取运行时、下载模型、生成本机配置
+python scripts/pipeline.py doctor   # 检查 GPU、ffmpeg、模型、后端与密钥
 ```
 
-然后在 Codex 中直接说：
+`setup` 会自动安装 **pyVideoTrans v4.16** 与 **IndexTTS2 v2.0.0** 到**技能目录之外**的 `<vendor 根>`（Windows 默认 `%LOCALAPPDATA%\video-translate\vendor`），并应用补丁。需要 git、网络和约 20GB+ 空闲磁盘。
 
-```text
-Read AGENTS.md and SKILL.md, run doctor, then translate ...
-```
-
-`AGENTS.md` 已经包含命令、vendor 约束和执行规则。
-
-## 快速开始
+换盘用 `VTV_VENDOR_DIR` 或 `setup --vendor-dir DIR`；已有安装可复用；不想自动下载时设 `VTV_AUTO_INSTALL=0`：
 
 ```bash
-# 1. 安装依赖、模型，写本机 config/params
-python scripts/pipeline.py setup
+python scripts/pipeline.py setup --reuse-pvt /path/to/pyvideotrans --reuse-itt /path/to/index-tts2-cli
+```
 
-# 2. 自检
-python scripts/pipeline.py doctor
+### 3. 启动配音服务
 
-# 3. 启动 IndexTTS2 API :8791 + Gradio 桥接 :7861（批量时只需启动一次）
-python scripts/pipeline.py serve
+```bash
+python scripts/pipeline.py serve    # IndexTTS2 API :8791 + Gradio 桥接 :7861
+```
 
-# 4. 翻译（prep → dub → post；也可以只跑其中一段）
+批量处理时只需启动一次。
+
+### 4. 翻译
+
+```bash
 python scripts/pipeline.py run \
   --src "D:/videos" --out "D:/translated" \
   --source en --target zh-cn --backend index
+```
 
-# 可选：只处理部分视频（按文件名前缀匹配）
-python scripts/pipeline.py run \
-  --src "D:/videos" --out "D:/translated" --videos "001,005"
+也可以拆成三段按需执行：`prep`（识别/翻译/审校）→ `dub`（配音）→ `post`（合成/响度）。
 
-# 5. 汇总 QC
+### 5. 查看 QC
+
+```bash
 python scripts/pipeline.py report --out "D:/translated"
 ```
 
-产物：
+打开 `<out>/QC_SUMMARY.md` 逐条确认；全部 PASS 即可交付。
+
+## 输出产物
 
 ```text
-<out>/<原名><final_suffix>.mp4      # 成品（final_suffix 可配，如 _中文）
-<out>/_字幕/<原名>.{源,目标}.srt     # 字幕，故意与 MP4 分开，避免播放器叠成两层
-<out>/QC_SUMMARY.md                 # QC 汇总
-<out>/_work/                        # 中间文件：prep 结果、配音轨、中间视频
+<out>/
+├── <原名><final_suffix>.mp4        # 成品（final_suffix 可配，如 _中文）
+├── _字幕/
+│   └── <原名>.{源,目标}.srt        # 双语字幕，故意与 MP4 分开，避免播放器叠成两层
+├── QC_SUMMARY.md                   # QC 汇总
+└── _work/                          # 中间文件：prep 结果、配音轨、中间视频（用于续跑）
 ```
 
-`_work` 用于断点续跑与局部重做；**整批交付并 QC 通过后可以删除**（见“批量课程”的
-`clean`）。删除后想再改某条视频，需要重新翻译该条。
+`_work` 用完即可删：整批交付并 QC 通过后执行 `clean`（见下节）。删除后想改单条视频需要重新翻译该条；逐句配音缓存位于 `pyvideotrans/tmp/dubbing_cache`，不受影响。
 
-Windows 后台 / Agent 场景：
+## 批量译制整门课程
 
-```bash
-pythonw scripts/pipeline.pyw run --src "D:/videos" --out "D:/translated"
-```
-
-## 批量课程
-
-`scripts/batch_courses.py` 用 manifest 驱动多门课：`prep` 可多课并行，`dub+post`
-严格串行（IndexTTS2 单 worker）。清单示例：
+`scripts/batch_courses.py` 用 manifest 驱动多门课程。`prep` 可多课并行，`dub + post` 严格串行（IndexTTS2 单 worker）。
 
 ```jsonc
 {
@@ -194,153 +171,108 @@ python scripts/batch_courses.py clean  --manifest courses.json --dry-run
 python scripts/batch_courses.py clean  --manifest courses.json
 ```
 
-- `run` 会先 `serve`，逐课串行执行；每课结束把 QC 归档到
-  `<qc_dir>/<编号>_<课程名>/`，并写 `batch_status.json`、`batch_summary.md`。
-- 中断后重跑同一 `run` 命令即可：已完成且 QC 通过的视频会跳过。
-- 重复 stem（多门课都有 `001_Introduction`）靠课程归档区分；历史批次续跑时把
-  `qc_dir` 指到原归档目录。
-- `status` 每课显示 `finals`（成品）、`dubbed`（已合成）和 `pending`（缺成品或 QC 未过）。
-- `clean` 只删除 `batch_status.json` 里 `ok=true`、成品齐全且 QC 全部通过的课程的
-  `_work`；其余课程保留并返回非零。先加 `--dry-run` 查看将删除的目录和体积。
-- `prep` 与 `run` 分两步跑时，中间可插入 `prep_check.py` 门禁（见下节）。
+- `run` 会先 `serve`，逐课串行执行；每课结束把 QC 归档到 `<qc_dir>/<编号>_<课程名>/`，并写 `batch_status.json`、`batch_summary.md`。
+- 中断后重跑同一 `run` 命令即可：已完成且 QC 通过的视频自动跳过。
+- `status` 每课显示 `finals`（成品数）、`dubbed`（已合成数）与 `pending`（缺成品或 QC 未过）。
+- `clean` 只删除 `batch_status.json` 中 `ok=true`、成品齐全且 QC 全部通过的课程的 `_work`；未交付的课程保留并返回非零退出码。先加 `--dry-run` 查看将删除的目录与体积。
+- 多门课存在同名文件（如 `001_Introduction`）时靠课程归档目录区分；历史批次续跑请把 `qc_dir` 指回原归档目录。
 
-## 断句审校与质量门禁
+## 质量门禁
 
-- `prep` 先合并源碎句、翻译后按句子重切，再由 LLM 审校生成 TTS 语义单元；
-  显示字幕仍是短块，两者块数不同是正常的。
-- 审校按 `resegment_chunk_cues`（默认 90 条，`VTV_RESEGMENT_CHUNK_CUES` 可覆盖）
-  在句末切块，逐块请求并缓存；长片不会因单次 JSON 输出被截断而整条回退。
-- 小模型常把 4 块以上并成一组：`repair_groups` 会机械拆成 ≤3 块单元；只有覆盖
-  不连续/漏块才判定失败。本地后端“分组非法”（rc=4）不会让它被标记失效，
-  仅网络/连接失败（rc=3）才切换下一个 provider。
-- 本地 llama-server 高负载下偶发连接重置（WinError 10054）：审校请求对
-  ConnectionReset/BrokenPipe 与 502/503/504 自动重试一次，仍失败才 fallback。
-- 翻译缓存命中但缺 `<target>.tts.srt` 时，`prep` 会自动只重跑 LLM 审校，不重新翻译。
-
-`prep` 完成后、`dub` 之前建议跑门禁（也可用于核验子代理的“已完成”声明）：
+`prep` 完成、`dub` 开始之前，建议跑一次门禁（也可用于核验子代理的"已完成"声明）：
 
 ```bash
 python scripts/prep_check.py --manifest courses.json
 python scripts/prep_check.py --out "D:/videos/course/_中文译制"
 ```
 
-它检查每个视频的 `<source>.srt` / `<target>.srt` / `<target>.tts.srt` 是否齐全、
-术语 recall 是否 ≥95%、TTS 单元是否超 `resegment_target_max_chars`；任一失败
-退出码非零。术语表用 `原文=译文1|译文2` 记录可接受的多种译法，减少误判。
+检查项：`<source>.srt` / `<target>.srt` / `<target>.tts.srt` 是否齐全、术语 recall 是否 ≥95%、TTS 单元是否超过 `resegment_target_max_chars`。任一失败退出码非零。
 
-## 本地 LLM（优先）
+门禁之外的运行时保障：
 
-`translate_channel=auto`（默认）会按顺序探测：
+- 审校按 `resegment_chunk_cues`（默认 90 条）在句末切块，逐块请求并缓存；长片不会因单次 JSON 输出截断而整条回退。
+- 本地小模型常把 4 块以上并成一组：`repair_groups` 会机械拆成 ≤3 块单元，只有覆盖不连续或漏块才判定失败。
+- 本地 llama-server 高负载下偶发连接重置（WinError 10054）：审校请求对 ConnectionReset / BrokenPipe 与 502/503/504 自动重试一次。
+- 翻译缓存命中但缺 `<target>.tts.srt` 时，`prep` 自动只重跑 LLM 审校，不重新翻译。
 
-1. `VTV_LOCAL_LLM_API` / `local_llm_api`
-2. `local_llm_candidates`：默认 `http://127.0.0.1:8081/v1`（llama.cpp），
-   然后 `http://127.0.0.1:11434/v1`（Ollama）
-3. `params.json` 的 `localllm_api`
+## 配置与密钥
 
-判定方式是 `GET <base>/models`。单模型服务（`llama-server`）直接使用；多模型服务
-（Ollama）需用 `local_llm_model` 或 `VTV_LOCAL_LLM_MODEL` 指定模型，否则跳过，
-避免误用小模型。命中后 MT、断句审校、`polish` 都走本地。
+配置只放非敏感运行参数：复制 `config.example.json` 为 `config.json` 后按需修改。
 
 ```jsonc
-// config.json
 {
-  "translate_channel": "auto",
-  "local_llm_api": "",                          // 空 = 自动探测
+  "translate_channel": "auto",                 // 本地优先，DeepSeek 兜底
   "local_llm_model": "qwen3.6:35b-a3b-mtp-q4_K_M",
-  "local_llm_candidates": "http://127.0.0.1:8081/v1,http://127.0.0.1:11434/v1"
+  "local_llm_candidates": "http://127.0.0.1:8081/v1,http://127.0.0.1:11434/v1",
+  "resegment_chunk_cues": 90,                  // 长片输出截断时可调小至 60
+  "glossary": "assets/glossary.txt"            // 换课程/领域必须替换
 }
 ```
 
-> 本地 LLM 与 IndexTTS2 会争显存。批量流程：`prep`（本地 LLM 在线）→ 停本地
-> 服务 → `run`（MT 命中缓存，只做 TTS）→ 下一门课再启动本地服务。
+`translate_channel=auto` 会按 `local_llm_api` → `local_llm_candidates`（llama.cpp `:8081`、Ollama `:11434`）→ `params.json:localllm_api` 的顺序探测。单模型服务（llama.cpp）直接使用；多模型服务（Ollama）必须用 `local_llm_model` / `VTV_LOCAL_LLM_MODEL` 指定模型，否则跳过，避免误选小模型。
 
-## DeepSeek API Key（本地不可用时兜底）
-
-只有本地 LLM 全部不可达时才需要。Key **不存在** `config.json`，而是写到 pyVideoTrans 的
-`params.json`：
+**DeepSeek 只在本地全部不可达时才需要。** Key 不写入 `config.json`，只保存在：
 
 ```text
 <pyvideotrans_home>/videotrans/params.json
 ```
 
-默认安装即：
+推荐让 `setup` 写入，不要提交到 Git、也不要贴进聊天：
+
+```bash
+python scripts/pipeline.py setup --deepseek-key "sk-..."
+```
+
+`doctor` 只检查 Key 是否存在，不验证有效性；`python scripts/trans_cli.py test-channel --channel deepseek` 可验证渠道。
 
 ```text
-<vendor 根>/pyvideotrans/videotrans/params.json
+本地 LLM 与 IndexTTS2 会争抢显存。批量流程推荐：
+prep（本地 LLM 在线）→ 停本地服务 → run（MT 命中缓存，只做 TTS）→ 下一门课再启动本地服务。
 ```
 
-三种配置方式：
+## 注意事项
 
-```bash
-# 1) setup 参数（推荐）
-python scripts/pipeline.py setup --deepseek-key "sk-..."
-
-# 2) 环境变量
-export DEEPSEEK_API_KEY="sk-..."       # Windows PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
-python scripts/pipeline.py setup
-
-# 3) 手动编辑 params.json
-cp params.example.json <pyvideotrans_home>/videotrans/params.json
-# 然后把 deepseek_key 改成真实 Key
-```
-
-`params.example.json` 是模板，`deepseek_key` 留空；不要把真实 Key 写进
-`params.example.json` 或提交到 Git。`params.json` 已在 `.gitignore` 中。
-
-`doctor` 只检查 Key 是否存在，不验证有效性；验证渠道用：
-
-```bash
-python scripts/trans_cli.py test-channel --channel deepseek
-```
-
-或直接跑一条短视频翻译。
-
-## 配置
-
-`config.json` 只放非敏感运行参数，不保存 API Key。`setup` 会自动生成；手动配置可复制模板：
-
-```bash
-cp config.example.json config.json
-```
-
-常用键：
-
-- `voice_autorate=false`、`video_autorate=true`：声音优先。
-- `max_video_speedup_rate=1.25`、`max_phrase_pause_ms=300`。
-- `subtitle_mode=hard` 或 `soft`。
-- `subtitle_max_chars=22`（CJK 上限；`subtitle_fit_frame=true` 会按帧宽收紧到约 8–22 字）。
-- `translate_channel=auto`：本地 LLM 优先，DeepSeek 兜底；`local` 只用本地。
-- `resegment_llm_check=true`、`resegment_llm_provider=auto`：LLM 审校断句，本地优先。
-- `resegment_chunk_cues=90`：审校分块大小；长片输出截断或本地模型较弱时可调小（如 60）。
-- `duration_tol_s=15`：QC 时长容差的绝对下限。
-- `glossary=assets/glossary.txt`：换课程/领域时替换术语表。
-
-完整配置见 [`references/configuration.md`](references/configuration.md)。
+1. **先 `doctor` 再跑任务；首次先 `setup`。** 缺依赖时按提示补跑，不要直接 `run`。
+2. **不要把输入视频放进输出目录。** 上游 `clear_cache` 默认递归删除输出目录；`pipeline.py` 已规避，手工调用 `trans_cli.py` 时必须加 `--no-clear-cache`。
+3. **SRT 不要放在成品 MP4 旁边。** 播放器会自动加载同名 SRT，与硬字幕叠加成"两层字幕"；本流水线统一放到 `<out>/_字幕/`。
+4. **IndexTTS2 是单 worker。** 不要并发请求同一守护进程；批量时 `prep` 可并行，`run` 必须按课程串行。
+5. **优先改配置，不改 vendor。** 换后端、语言、字幕模式用 CLI 参数或 `config.json`；升级上游后本项目补丁需重新应用。
+6. **Windows 后台用 `pythonw scripts/pipeline.pyw`**，不要调用 `.cmd` 或 venv 的 `pythonw.exe`，否则会再拉起 `python.exe` / `conhost` 并闪窗。
 
 ## 文档索引
 
-| 想做什么 | 读 |
+| 你想做什么 | 读这里 |
 |---|---|
-| 查全部命令、参数、`--videos` 过滤 | [`references/cli.md`](references/cli.md) |
+| 查全部命令、参数、`--videos` 过滤、退出码 | [`references/cli.md`](references/cli.md) |
 | 改配置、环境变量、路径解析 | [`references/configuration.md`](references/configuration.md) |
-| 理解阶段、并发、断点续跑 | [`references/pipeline.md`](references/pipeline.md) |
-| 调字幕/翻译/克隆/响度/QC | [`references/quality.md`](references/quality.md) |
+| 理解阶段、并发、断点续跑、dub-only | [`references/pipeline.md`](references/pipeline.md) |
+| 调字幕 / 翻译 / 克隆 / 响度 / QC | [`references/quality.md`](references/quality.md) |
 | 配音节奏、`fit_*` 标定 | [`references/audio-fit.md`](references/audio-fit.md) |
 | 报错、爆音、字幕不同步 | [`references/troubleshooting.md`](references/troubleshooting.md) |
 | 安装、迁移、Windows 进程模型 | [`references/deployment.md`](references/deployment.md) |
+| GPU 锁频、性能优化 | [`references/performance.md`](references/performance.md) |
+
+脚本是执行入口，无需整段阅读：`python scripts/pipeline.py <command> --help`。
+
+## 环境要求
+
+| 项 | 推荐 |
+|---|---|
+| OS | Windows 11 优先；Linux x86_64 可用但未完整回归；macOS 未验证 |
+| GPU | NVIDIA，≥12GB 显存（IndexTTS2 约 7.6GB） |
+| RAM / 磁盘 | ≥16GB 内存；≥20GB 空闲磁盘 |
+| Python | 3.10+ |
+| 工具 | uv、ffmpeg、Rubberband（可选） |
+| 网络 | 可访问 PyPI / Hugging Face / ModelScope；在线兜底时需访问 DeepSeek API |
 
 ## 已知边界
 
-- 主要开发和验证环境是 Windows 11 + NVIDIA GPU；Linux 可跑但未完整回归，macOS 未验证。
-- IndexTTS2 是单 worker，不能并行跑两条配音任务；`prep` 可以并行。
-- 双语字幕保持源/目标 1:1 配对，不做单语字幕的一行二次切分。
+- 主要开发与验证环境为 Windows 11 + NVIDIA GPU；Linux 可跑但未完整回归，macOS 未验证。
+- IndexTTS2 单 worker，不能并行跑两条配音任务；`prep` 可以并行。
+- 双语字幕保持源 / 目标 1:1 配对，不做单语字幕的一行二次切分。
 - 本地 LLM 与 DeepSeek 都不可用时回退规则断句 + `fit_*`；显示字幕仍会按一行切条。
-- 删除 `_work` 后，想修改某条视频需要重新翻译（逐句 TTS 缓存在
-  `pyvideotrans/tmp/dubbing_cache`，不受影响）。
 - 开源仓库不附带课程视频、字幕、模型或 API Key。
 
 ## 许可证
 
-本仓库自有代码使用 MIT，见 [`LICENSE`](LICENSE)。第三方依赖不由本仓库分发，
-各自遵循其许可证；使用前请阅读 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
-IndexTTS2 不是 OSI 开源许可证，商用或有规模限制时请先确认上游条款。
+本仓库自有代码使用 MIT，见 [`LICENSE`](LICENSE)。第三方依赖不由本仓库分发，各自遵循其许可证；使用前请阅读 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。IndexTTS2 不是 OSI 开源许可证，商用或有规模限制时请先确认上游条款。
