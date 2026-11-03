@@ -14,12 +14,12 @@
   <rect width="1280" height="380" rx="18" fill="url(#grid)"/>
 
   <g font-family="'Segoe UI','Microsoft YaHei','PingFang SC',system-ui,sans-serif">
-    <text x="52" y="46" font-size="19" font-weight="700" fill="#e8edf5">批量译制整门课程</text>
-    <text x="52" y="70" font-size="12.5" fill="#8b98a9">batch_courses.py 读取 manifest：prep 多课并行，dub + post 严格串行（IndexTTS2 单 worker），QC 自动归档。</text>
+    <text x="52" y="47" font-size="21" font-weight="700" fill="#e8edf5">批量译制整门课程</text>
+    <text x="52" y="72" font-size="13.5" fill="#8b98a9">batch_courses.py 读取 manifest：prep 多课并行，dub + post 严格串行（IndexTTS2 单 worker），QC 自动归档。</text>
 
     <!-- 列标题 -->
-    <text x="305" y="104" text-anchor="middle" font-size="12" font-weight="600" letter-spacing=".5" fill="#7fb2ff">PREP · 多课并行</text>
-    <text x="850" y="104" text-anchor="middle" font-size="12" font-weight="600" letter-spacing=".5" fill="#c8b18a">DUB + POST · 一次一门</text>
+    <text x="305" y="105" text-anchor="middle" font-size="13.5" font-weight="600" letter-spacing=".5" fill="#7fb2ff">PREP · 多课并行</text>
+    <text x="850" y="105" text-anchor="middle" font-size="13.5" font-weight="600" letter-spacing=".5" fill="#c8b18a">DUB + POST · 一次一门</text>
 
     <!-- 行分隔 -->
     <g stroke="#ffffff" stroke-opacity=".05">
@@ -31,7 +31,7 @@
     <line x1="470" y1="96" x2="470" y2="292" stroke="#ffffff" stroke-opacity=".12" stroke-dasharray="4 6"/>
 
     <!-- 行标签 -->
-    <g font-size="13" fill="#9aa7b8">
+    <g font-size="15" fill="#9aa7b8">
       <text x="52" y="141">课程 A</text>
       <text x="52" y="201">课程 B</text>
       <text x="52" y="261">课程 C</text>
@@ -39,39 +39,39 @@
 
     <!-- 课程 A -->
     <rect x="150" y="118" width="310" height="34" rx="7" fill="#7fb2ff" fill-opacity=".16" stroke="#7fb2ff" stroke-opacity=".4"/>
-    <text x="305" y="139" text-anchor="middle" font-size="11" fill="#cfe0ff">ASR · 翻译 · 审校</text>
+    <text x="305" y="140" text-anchor="middle" font-size="13" fill="#cfe0ff">ASR · 翻译 · 审校</text>
     <rect x="480" y="118" width="130" height="34" rx="7" fill="#f5b95a" fill-opacity=".16" stroke="#f5b95a" stroke-opacity=".42"/>
-    <text x="545" y="139" text-anchor="middle" font-family="'Cascadia Code',Consolas,monospace" font-size="11" fill="#ffe2b0">dub</text>
+    <text x="545" y="140" text-anchor="middle" font-family="'Cascadia Code',Consolas,monospace" font-size="13" fill="#ffe2b0">dub</text>
     <rect x="610" y="118" width="110" height="34" rx="7" fill="#4fd1a5" fill-opacity=".14" stroke="#4fd1a5" stroke-opacity=".4"/>
-    <text x="665" y="139" text-anchor="middle" font-family="'Cascadia Code',Consolas,monospace" font-size="11" fill="#b8f0d8">post</text>
+    <text x="665" y="140" text-anchor="middle" font-family="'Cascadia Code',Consolas,monospace" font-size="13" fill="#b8f0d8">post</text>
 
     <!-- 课程 B -->
     <rect x="150" y="178" width="310" height="34" rx="7" fill="#7fb2ff" fill-opacity=".16" stroke="#7fb2ff" stroke-opacity=".4"/>
-    <text x="305" y="199" text-anchor="middle" font-size="11" fill="#cfe0ff">ASR · 翻译 · 审校</text>
+    <text x="305" y="200" text-anchor="middle" font-size="13" fill="#cfe0ff">ASR · 翻译 · 审校</text>
     <rect x="730" y="178" width="130" height="34" rx="7" fill="#f5b95a" fill-opacity=".16" stroke="#f5b95a" stroke-opacity=".42"/>
-    <text x="795" y="199" text-anchor="middle" font-family="'Cascadia Code',Consolas,monospace" font-size="11" fill="#ffe2b0">dub</text>
+    <text x="795" y="200" text-anchor="middle" font-family="'Cascadia Code',Consolas,monospace" font-size="13" fill="#ffe2b0">dub</text>
     <rect x="860" y="178" width="110" height="34" rx="7" fill="#4fd1a5" fill-opacity=".14" stroke="#4fd1a5" stroke-opacity=".4"/>
-    <text x="915" y="199" text-anchor="middle" font-family="'Cascadia Code',Consolas,monospace" font-size="11" fill="#b8f0d8">post</text>
+    <text x="915" y="200" text-anchor="middle" font-family="'Cascadia Code',Consolas,monospace" font-size="13" fill="#b8f0d8">post</text>
 
     <!-- 课程 C -->
     <rect x="150" y="238" width="310" height="34" rx="7" fill="#7fb2ff" fill-opacity=".16" stroke="#7fb2ff" stroke-opacity=".4"/>
-    <text x="305" y="259" text-anchor="middle" font-size="11" fill="#cfe0ff">ASR · 翻译 · 审校</text>
+    <text x="305" y="260" text-anchor="middle" font-size="13" fill="#cfe0ff">ASR · 翻译 · 审校</text>
     <rect x="980" y="238" width="130" height="34" rx="7" fill="#f5b95a" fill-opacity=".16" stroke="#f5b95a" stroke-opacity=".42"/>
-    <text x="1045" y="259" text-anchor="middle" font-family="'Cascadia Code',Consolas,monospace" font-size="11" fill="#ffe2b0">dub</text>
+    <text x="1045" y="260" text-anchor="middle" font-family="'Cascadia Code',Consolas,monospace" font-size="13" fill="#ffe2b0">dub</text>
     <rect x="1110" y="238" width="110" height="34" rx="7" fill="#4fd1a5" fill-opacity=".14" stroke="#4fd1a5" stroke-opacity=".4"/>
-    <text x="1165" y="259" text-anchor="middle" font-family="'Cascadia Code',Consolas,monospace" font-size="11" fill="#b8f0d8">post</text>
+    <text x="1165" y="260" text-anchor="middle" font-family="'Cascadia Code',Consolas,monospace" font-size="13" fill="#b8f0d8">post</text>
 
     <!-- 图例 -->
-    <g font-size="11.5" fill="#9aa7b8">
+    <g font-size="13" fill="#9aa7b8">
       <rect x="52" y="312" width="14" height="14" rx="4" fill="#7fb2ff" fill-opacity=".25" stroke="#7fb2ff" stroke-opacity=".5"/>
-      <text x="74" y="323">prep 并行</text>
+      <text x="74" y="324">prep 并行</text>
       <rect x="168" y="312" width="14" height="14" rx="4" fill="#f5b95a" fill-opacity=".25" stroke="#f5b95a" stroke-opacity=".5"/>
-      <text x="190" y="323">dub 串行</text>
+      <text x="190" y="324">dub 串行</text>
       <rect x="284" y="312" width="14" height="14" rx="4" fill="#4fd1a5" fill-opacity=".22" stroke="#4fd1a5" stroke-opacity=".5"/>
-      <text x="306" y="323">post 串行</text>
+      <text x="306" y="324">post 串行</text>
     </g>
-    <text x="420" y="323" font-family="'Segoe UI','Microsoft YaHei','PingFang SC',system-ui,sans-serif" font-size="11.5" fill="#8b98a9">每课结束归档 QC/&lt;编号_课程名&gt;/，batch_status.json 记录状态</text>
+    <text x="420" y="324" font-family="'Segoe UI','Microsoft YaHei','PingFang SC',system-ui,sans-serif" font-size="13" fill="#8b98a9">每课结束归档 QC/&lt;编号_课程名&gt;/，batch_status.json 记录状态</text>
 
-    <text x="52" y="356" font-family="'Segoe UI','Microsoft YaHei','PingFang SC',system-ui,sans-serif" font-size="12" fill="#6f7d8f">中断后重跑同一 run 命令：已完成且 QC 通过的视频自动跳过；clean 在交付后删除 _work。</text>
+    <text x="52" y="357" font-family="'Segoe UI','Microsoft YaHei','PingFang SC',system-ui,sans-serif" font-size="13" fill="#6f7d8f">中断后重跑同一 run 命令：已完成且 QC 通过的视频自动跳过；clean 在交付后删除 _work。</text>
   </g>
 </svg>

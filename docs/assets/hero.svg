@@ -62,11 +62,11 @@
     <circle cx="832" cy="72" r="5" fill="#ff5f57" opacity=".75"/>
     <circle cx="850" cy="72" r="5" fill="#febc2e" opacity=".75"/>
     <circle cx="868" cy="72" r="5" fill="#28c840" opacity=".75"/>
-    <text x="890" y="77" font-size="12" fill="#8b98a9">translated / 交付目录</text>
-    <text x="1184" y="77" font-size="11.5" font-weight="700" text-anchor="end" fill="#4fd1a5">8 / 8 PASS</text>
+    <text x="890" y="77" font-size="13" fill="#8b98a9">translated / 交付目录</text>
+    <text x="1184" y="77" font-size="12.5" font-weight="700" text-anchor="end" fill="#4fd1a5">8 / 8 PASS</text>
     <line x1="806" y1="90" x2="1216" y2="90" stroke="#1f2a3b"/>
 
-    <g font-size="12.5">
+    <g font-size="13.5">
       <rect x="834" y="111" width="7" height="7" rx="2" fill="#7fb2ff"/>
       <text x="852" y="120" fill="#e8edf5">001_Introduction_中文.mp4</text>
       <text x="1184" y="120" text-anchor="end" fill="#4fd1a5">✓</text>
