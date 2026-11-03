@@ -22,21 +22,38 @@ from pathlib import Path
 _applied = False
 
 
+def utf8_stdio() -> None:
+    """Force UTF-8, line-buffered stdout/stderr.
+
+    Redirected Windows pipes default to the locale code page (cp936), which
+    turns Chinese in ``--help`` and progress lines into mojibake, and block
+    buffering hides progress until the process exits.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            reconf = getattr(stream, "reconfigure", None)
+            if reconf is not None:
+                reconf(encoding="utf-8", line_buffering=True)
+        except Exception:
+            pass
+
+
 def ensure_stdio(log_path: str | Path) -> None:
     """Give pythonw.exe a stdout/stderr; it starts with both set to None.
 
     Without this every ``print`` raises AttributeError under pythonw.  When the
-    process does have a console (normal ``python`` launch) this is a no-op.
+    process does have a console (normal ``python`` launch) the streams stay as
+    they are, but are switched to UTF-8/line-buffered.
     """
-    if sys.stdout is not None and sys.stderr is not None:
-        return
-    path = Path(log_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    stream = open(path, "a", encoding="utf-8", buffering=1)
-    if sys.stdout is None:
-        sys.stdout = stream
-    if sys.stderr is None:
-        sys.stderr = stream
+    if sys.stdout is None or sys.stderr is None:
+        path = Path(log_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stream = open(path, "a", encoding="utf-8", buffering=1)
+        if sys.stdout is None:
+            sys.stdout = stream
+        if sys.stderr is None:
+            sys.stderr = stream
+    utf8_stdio()
 
 
 def hide_own_console() -> None:

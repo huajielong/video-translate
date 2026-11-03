@@ -33,6 +33,25 @@ traceback 写到 `.runtime/logs/entry.log` / `trans_cli.log`。
 排查：任务运行时看 `conhost.exe` 的父进程；正常不应有由 `pythonw` 创建的 conhost。
 `serve` 后 API/shim/daemon 三条命令都应是 `uv\python\...\pythonw.exe`。
 
+## 查找/结束残留进程（Windows）
+
+Git Bash（MSYS）里的 `pgrep -f` / `kill -0` **不认识 Windows PID**，会漏查、
+误判“进程已退出”，或让 `kill` 静默失败。需要确认或结束 Python/ffmpeg 进程时，
+统一用 PowerShell：
+
+```powershell
+# 按命令行查找（含 pipeline.py、batch_courses.py、ffmpeg 等）
+Get-CimInstance Win32_Process |
+  Where-Object { $_.CommandLine -like '*pipeline.py*' } |
+  Select-Object ProcessId, ParentProcessId, CommandLine
+
+# 结束指定进程
+Stop-Process -Id 12345
+```
+
+`Get-Process python*` 也能用，但看不到命令行；判断是哪个任务时用
+`Get-CimInstance Win32_Process`。进程模型排查同样适用 `Get-CimInstance` 查父进程。
+
 ## 分发
 
 本仓库采用 **首次使用自动下载**：GitHub 仓库只包含技能代码、文档、术语表、

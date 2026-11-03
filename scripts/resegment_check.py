@@ -25,17 +25,21 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _winhide import utf8_stdio  # noqa: E402
 from resegment_srt import (  # noqa: E402
     parse_srt,
     split_long,
     split_sentences,
     write_srt,
 )
+
+utf8_stdio()
 
 SKILL = Path(__file__).resolve().parent.parent
 CACHE = SKILL / ".runtime" / "resegment_cache"
@@ -101,6 +105,35 @@ def cache_key(texts: list[str], max_chars: int, model: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _ends_sentence(text: str) -> bool:
+    return text.rstrip().endswith(("。", "！", "？", ".", "!", "?", "…", "；", ";"))
+
+
+def split_chunks(blocks: list[dict], size: int) -> list[list[dict]]:
+    """Split cues into chunks, preferring a sentence boundary near the limit.
+
+    Long transcripts make the model echo every cue back, so a single response
+    can exceed the provider's output cap and arrive truncated.  Auditing each
+    chunk separately keeps responses small enough to arrive complete.
+    """
+    if size <= 0 or len(blocks) <= size:
+        return [blocks]
+    out: list[list[dict]] = []
+    start = 0
+    n = len(blocks)
+    while start < n:
+        end = min(start + size, n)
+        if end < n:
+            floor = max(start + size // 2, start + 1)
+            for k in range(end, floor, -1):
+                if _ends_sentence(blocks[k - 1]["text"]):
+                    end = k
+                    break
+        out.append(blocks[start:end])
+        start = end
+    return out
+
+
 def build_prompt(texts: list[str], max_chars: int) -> str:
     lines = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
     return (
@@ -121,6 +154,10 @@ def build_prompt(texts: list[str], max_chars: int) -> str:
 
 def call_llm(texts: list[str], max_chars: int, key: str, model: str,
              base: str) -> list[dict] | None:
+    try:
+        max_tokens = int(os.environ.get("VTV_RESEGMENT_MAX_TOKENS") or 8192)
+    except (TypeError, ValueError):
+        max_tokens = 8192
     body = {
         "model": model,
         "messages": [
@@ -128,7 +165,7 @@ def call_llm(texts: list[str], max_chars: int, key: str, model: str,
             {"role": "user", "content": build_prompt(texts, max_chars)},
         ],
         "temperature": 0.1,
-        "max_tokens": 2048,
+        "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
     }
     if not _is_local(base):
@@ -166,14 +203,33 @@ def call_llm(texts: list[str], max_chars: int, key: str, model: str,
         return None
 
 
+def _transient(exc: BaseException) -> bool:
+    """Connection resets happen under load (llama-server WinError 10054);
+    one retry usually succeeds and avoids falling back to another provider."""
+    if isinstance(exc, HTTPError):
+        return exc.code in (502, 503, 504)
+    if isinstance(exc, URLError):
+        exc = exc.reason if isinstance(exc.reason, BaseException) else exc
+    return isinstance(exc, (ConnectionResetError, ConnectionAbortedError,
+                            BrokenPipeError))
+
+
 def _post(base: str, body: dict, key: str, timeout: float) -> dict:
     req = urllib.request.Request(
         base + "/chat/completions", data=json.dumps(body).encode("utf-8"),
         method="POST",
         headers={"Content-Type": "application/json",
                  "Authorization": f"Bearer {key}"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", "replace"))
+    for attempt in (1, 2):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8", "replace"))
+        except Exception as exc:  # noqa: BLE001
+            if attempt == 2 or not _transient(exc):
+                raise
+            print(f"[resegment-check] {base} transient error, retrying once: {exc}")
+            time.sleep(2.0)
+    raise AssertionError("unreachable")
 
 
 def validate_groups(groups, blocks) -> list[dict] | None:
@@ -195,6 +251,40 @@ def validate_groups(groups, blocks) -> list[dict] | None:
             return None
         expected = idx[-1] + 1
         out.append({"blocks": idx, "text": re.sub(r"\s+", " ", text).strip()})
+    if expected != n + 1 or any(not g["text"] for g in out):
+        return None
+    return out
+
+
+def repair_groups(groups, blocks) -> list[dict] | None:
+    """Validate coverage, splitting oversized groups into <=3-block units.
+
+    Small models often honour sentence boundaries but ignore the 3-block cap.
+    Splitting those groups mechanically keeps the boundary information while
+    the concatenated original text keeps every word.
+    """
+    if not groups:
+        return None
+    n = len(blocks)
+    expected = 1
+    out = []
+    for g in groups:
+        if not isinstance(g, dict):
+            return None
+        idx = g.get("blocks")
+        text = g.get("text")
+        if not isinstance(idx, list) or not idx or not isinstance(text, str):
+            return None
+        if idx != list(range(idx[0], idx[-1] + 1)) or idx[0] != expected:
+            return None
+        expected = idx[-1] + 1
+        if len(idx) <= 3:
+            out.append({"blocks": idx, "text": re.sub(r"\s+", " ", text).strip()})
+            continue
+        for i in range(0, len(idx), 3):
+            sub = idx[i:i + 3]
+            out.append({"blocks": sub,
+                        "text": "".join(blocks[j - 1]["text"] for j in sub).strip()})
     if expected != n + 1 or any(not g["text"] for g in out):
         return None
     return out
@@ -280,6 +370,44 @@ def apply_groups(groups: list[dict], blocks: list[dict], max_chars: int) -> list
     return out
 
 
+def audit_blocks(blocks: list[dict], max_chars: int, key: str, model: str,
+                 base: str, no_cache: bool = False
+                 ) -> tuple[list[dict] | None, int]:
+    """Run one LLM audit over a cue chunk; return (TTS units, exit code)."""
+    texts = [b["text"] for b in blocks]
+    digest = cache_key(texts, max_chars, model)
+    cached = CACHE / f"{digest}.json"
+    groups = None
+    if cached.is_file() and not no_cache:
+        try:
+            groups = json.loads(cached.read_text(encoding="utf-8")).get("groups")
+        except Exception:
+            groups = None
+    if groups is None:
+        groups = call_llm(texts, max_chars, key, model, base)
+        if groups is None:
+            return None, 3
+        valid = repair_groups(groups, blocks)
+        if valid is None:
+            idx = [g.get("blocks") for g in groups if isinstance(g, dict)][:6]
+            print(f"[resegment-check] invalid groups for {len(blocks)} cues: "
+                  f"n={len(groups)} first={idx}")
+            return None, 4
+        groups = valid
+        try:
+            CACHE.mkdir(parents=True, exist_ok=True)
+            cached.write_text(json.dumps({"model": model, "groups": groups},
+                                         ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+    else:
+        groups = repair_groups(groups, blocks)
+        if groups is None:
+            cached.unlink(missing_ok=True)
+            return None, 4
+    return apply_tts_groups(groups, blocks, max_chars), 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--input", required=True)
@@ -312,6 +440,27 @@ def main() -> int:
         print("[resegment-check] no LLM endpoint configured; keeping rule-based result")
         return keep_rules(3)
 
+    try:
+        chunk_size = int(os.environ.get("VTV_RESEGMENT_CHUNK_CUES") or 90)
+    except (TypeError, ValueError):
+        chunk_size = 90
+    chunks = split_chunks(blocks, chunk_size)
+    if args.tts_output and len(chunks) > 1:
+        write_srt(blocks, Path(args.output))
+        units: list[dict] = []
+        for i, chunk in enumerate(chunks, 1):
+            got, rc = audit_blocks(chunk, args.max_chars, key, model, base,
+                                   args.no_cache)
+            if got is None:
+                print(f"[resegment-check] chunk {i}/{len(chunks)} "
+                      f"failed rc={rc}; keeping rule-based result")
+                return keep_rules(rc)
+            units.extend(got)
+        write_srt(units, Path(args.tts_output))
+        print(f"resegment-check: {len(blocks)} cues -> {len(units)} TTS units "
+              f"in {len(chunks)} chunks -> {args.tts_output}")
+        return 0
+
     digest = cache_key(texts, args.max_chars, model)
     cached = CACHE / f"{digest}.json"
     groups = None
@@ -324,7 +473,7 @@ def main() -> int:
         groups = call_llm(texts, args.max_chars, key, model, base)
         if groups is None:
             return keep_rules(3)
-        valid = validate_groups(groups, blocks)
+        valid = repair_groups(groups, blocks)
         if valid is None:
             print("[resegment-check] invalid group list; keeping rule-based result")
             return keep_rules(4)
@@ -336,7 +485,7 @@ def main() -> int:
         except Exception:
             pass
     else:
-        groups = validate_groups(groups, blocks)
+        groups = repair_groups(groups, blocks)
         if groups is None:
             cached.unlink(missing_ok=True)
             return keep_rules(4)

@@ -33,6 +33,7 @@ Windows 上从 Agent、编辑器或计划任务（父进程没有控制台）运
 python scripts/batch_courses.py prep   --manifest courses.json --workers 4
 python scripts/batch_courses.py run    --manifest courses.json [--only 1,3] [--keep-serve]
 python scripts/batch_courses.py status --manifest courses.json
+python scripts/batch_courses.py clean  --manifest courses.json [--dry-run]
 ```
 
 manifest 每门课给 `name`、`root`、`modules`（可选 `out`）；顶层可给
@@ -43,6 +44,22 @@ manifest 每门课给 `name`、`root`、`modules`（可选 `out`）；顶层可�
 `001_Introduction`）靠课程归档区分，历史批次续跑时把 `qc_dir` 指到原归档目录。
 归档是**合并写入**（保留已有文件），重跑/续跑不会清空先前归档的 QC；否则共享的
 `.runtime/logs/<stem>.qc.json` 已被其他课程的同名视频覆盖，会导致归档缺项。
+
+`status` 每课显示 `finals`（成品）、`dubbed`（`_work` 中已合成的视频）和
+`pending`（缺成品或 QC 未过）。`clean` 在整批交付后删除各课 `_work`：
+只处理 `batch_status.json` 里 `ok=true`、成品数=预期数、QC 全部通过的课程，
+其余保留并返回非零；先加 `--dry-run` 可只报告不删除。
+
+prep 完成后、dub 之前建议跑门禁（也可用于核验子代理的“已完成”声明）：
+
+```bash
+python scripts/prep_check.py --manifest courses.json
+python scripts/prep_check.py --out "D:/videos/course/_中文译制"
+```
+
+它检查每个视频目录的 `<source>.srt` / `<target>.srt` / `<target>.tts.srt`
+是否齐全、术语 recall 是否 ≥95%、TTS 单元是否超 `resegment_target_max_chars`；
+任一失败退出码非零。
 
 ## 共享参数
 

@@ -462,6 +462,7 @@ def env(cfg: dict) -> dict:
     e["VTV_FIT_PRED_B"] = str(cfg.get("fit_pred_b", 0.123))
     e["VTV_FIT_CONDENSE_SPEED"] = str(cfg.get("fit_condense_speed", 1.25))
     e["VTV_GLOSSARY_FILE"] = str(cfg.get("glossary", ""))
+    e["VTV_RESEGMENT_CHUNK_CUES"] = str(cfg.get("resegment_chunk_cues", 90))
     reseg = cfg.get("_reseg")
     if reseg:
         e["VTV_RESEGMENT_API"] = reseg["api"]
@@ -1158,24 +1159,27 @@ def resegment_source(cfg: dict, stem: str, p: dict, fresh: bool = False) -> None
         print(f"[prep] {stem}: source resegment failed; keeping original cues")
 
 
-def resegment_target(cfg: dict, stem: str, p: dict, target: Path) -> None:
+def resegment_target(cfg: dict, stem: str, p: dict, target: Path,
+                     rules: bool = True) -> None:
     """Split/merge translated cues at sentence boundaries.
 
     The rule pass fixes display cues.  An LLM then audits the whole transcript
     (local first, DeepSeek fallback) and writes merged *TTS units* (possibly
     longer than one display cue); the
     dubbing stage uses those while the burned/archived subtitles keep the
-    display cue boundaries.
+    display cue boundaries.  ``rules=False`` retries only the LLM audit on an
+    already-resegmented target.
     """
     if not cfg.get("resegment", True) or not target.exists():
         return
     max_chars = int(cfg.get("resegment_target_max_chars", 44))
-    tmp = p["prep"] / f"{target.stem}.reseg.tmp.srt"
-    if resegment_file(cfg, target, tmp, max_chars, cfg["target_lang"], p["log"]):
-        tmp.replace(target)
-        print(f"[prep] {stem}: resegment target -> {target}")
-    else:
-        tmp.unlink(missing_ok=True)
+    if rules:
+        tmp = p["prep"] / f"{target.stem}.reseg.tmp.srt"
+        if resegment_file(cfg, target, tmp, max_chars, cfg["target_lang"], p["log"]):
+            tmp.replace(target)
+            print(f"[prep] {stem}: resegment target -> {target}")
+        else:
+            tmp.unlink(missing_ok=True)
 
     providers = review_providers(cfg)
     if cfg.get("_reseg_local_failed"):
@@ -1200,7 +1204,9 @@ def resegment_target(cfg: dict, stem: str, p: dict, target: Path) -> None:
             return
         checked.unlink(missing_ok=True)
         tts_tmp.unlink(missing_ok=True)
-        if prov["name"] == "local":
+        if prov["name"] == "local" and rc == 3:
+            # rc=4 means the model answered but produced invalid groups; the
+            # endpoint is healthy, so keep trying it for later videos.
             cfg["_reseg_local_failed"] = True
         print(f"[prep] {stem}: {prov['name']} resegment review failed rc={rc}")
     print(f"[prep] {stem}: all LLM review backends failed; keeping rule-based cues")
@@ -1247,7 +1253,12 @@ def mt_one(cfg: dict, stem: str, force: bool = False) -> bool:
         print(f"[prep] {stem}: no en.srt")
         return False
     if target.exists() and not force:
-        print(f"[prep] {stem}: translation cached")
+        tts_srt = p["prep"] / f"{target.stem}.tts.srt"
+        if cfg.get("resegment_llm_check", True) and not tts_srt.exists():
+            print(f"[prep] {stem}: translation cached; retrying TTS resegment review")
+            resegment_target(cfg, stem, p, target, rules=False)
+        else:
+            print(f"[prep] {stem}: translation cached")
         return True
     mt_dir = p["prep"] / "mt"
     shutil.rmtree(mt_dir, ignore_errors=True)

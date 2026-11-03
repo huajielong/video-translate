@@ -33,6 +33,10 @@ Usage:
     python scripts/batch_courses.py prep  --manifest courses.json [--workers 4]
     python scripts/batch_courses.py run   --manifest courses.json [--only 1,3]
     python scripts/batch_courses.py status --manifest courses.json
+    python scripts/batch_courses.py clean --manifest courses.json [--dry-run]
+
+`clean` deletes each course's `_work` directory only when the last `run`
+recorded that course as delivered (all finals present, QC all passed).
 """
 from __future__ import annotations
 
@@ -50,6 +54,10 @@ from pathlib import Path
 SKILL = Path(__file__).resolve().parent.parent
 PIPELINE = SKILL / "scripts" / "pipeline.py"
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+from _winhide import utf8_stdio  # noqa: E402
+
+utf8_stdio()
 
 
 def now() -> str:
@@ -350,18 +358,81 @@ def cmd_run(manifest: dict, args) -> int:
     return 0 if all(r["ok"] for r in results) else 1
 
 
+def work_dir_for(out: Path) -> Path:
+    wd = Path(read_config().get("work_dir") or "_work").expanduser()
+    return wd if wd.is_absolute() else out / wd
+
+
+def dir_size(path: Path) -> int:
+    total = 0
+    for p in path.rglob("*"):
+        if p.is_file():
+            total += p.stat().st_size
+    return total
+
+
+def delivery_verified(item: dict | None, out: Path) -> bool:
+    """A course is safe to clean only when `run` recorded every final and QC."""
+    if not item or not item.get("ok"):
+        return False
+    if item.get("pending"):
+        return False
+    try:
+        if Path(item.get("out", "")).resolve() != out.resolve():
+            return False
+    except Exception:
+        return False
+    return bool(item.get("expected") and item.get("outputs") == item.get("expected")
+                and item.get("qc_total")
+                and item.get("qc_passed") == item.get("qc_total"))
+
+
+def cmd_clean(manifest: dict, args) -> int:
+    status_path = Path(manifest["state_dir"]) / "batch_status.json"
+    try:
+        status = {r["index"]: r for r in
+                  json.loads(status_path.read_text(encoding="utf-8"))}
+    except Exception as exc:
+        raise SystemExit(f"cannot read {status_path}: {exc}")
+    rc = 0
+    for course in manifest["courses"]:
+        out = Path(course["out"])
+        work = work_dir_for(out)
+        if not work.is_dir():
+            print(f"#{course['index']} {course['name']}: no _work, skip")
+            continue
+        item = status.get(course["index"])
+        if not delivery_verified(item, out):
+            rc = 1
+            print(f"#{course['index']} {course['name']}: keep _work "
+                  f"(delivery/QC not verified)")
+            continue
+        size = dir_size(work)
+        if args.dry_run:
+            print(f"#{course['index']} {course['name']}: would delete {work} "
+                  f"({size / 2**30:.2f} GiB)")
+        else:
+            shutil.rmtree(work)
+            print(f"#{course['index']} {course['name']}: deleted {work} "
+                  f"({size / 2**30:.2f} GiB)")
+    return rc
+
+
 def cmd_status(manifest: dict, _args) -> int:
     suffix = read_config().get("final_suffix", "_中文")
     qc_root = Path(manifest["qc_dir"])
     for course in manifest["courses"]:
         out = Path(course["out"])
+        work = work_dir_for(out)
         total = len(course_stems(course))
         finals = sum(1 for _, s in course_stems(course)
                      if (out / f"{s}{suffix}.mp4").is_file())
+        dubbed = sum(1 for _, s in course_stems(course)
+                     if (work / s / f"{s}.mp4").is_file())
         pending = sum(len(v) for v in
                       pending_by_module(course, suffix, qc_root).values())
         print(f"#{course['index']} {course['name']}: {finals}/{total} finals, "
-              f"{pending} pending")
+              f"{dubbed}/{total} dubbed, {pending} pending")
     return 0
 
 
@@ -370,7 +441,7 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="command", required=True)
 
-    for name in ("prep", "run", "status"):
+    for name in ("prep", "run", "status", "clean"):
         p = sub.add_parser(name)
         p.add_argument("--manifest", required=True)
         if name == "prep":
@@ -383,6 +454,9 @@ def main() -> int:
                            help="comma-separated 1-based course indexes")
             p.add_argument("--keep-serve", action="store_true")
             p.add_argument("--allow-battery", action="store_true")
+        if name == "clean":
+            p.add_argument("--dry-run", action="store_true",
+                           help="report what would be deleted")
 
     args = ap.parse_args()
     manifest = load_manifest(Path(args.manifest))
@@ -390,6 +464,8 @@ def main() -> int:
         return cmd_prep(manifest, args)
     if args.command == "run":
         return cmd_run(manifest, args)
+    if args.command == "clean":
+        return cmd_clean(manifest, args)
     return cmd_status(manifest, args)
 
 

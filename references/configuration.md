@@ -68,6 +68,7 @@
 | `resegment_max_gap_ms` | `900` | 允许合并的相邻字幕间隔 |
 | `resegment_source_max_chars` | `140` | 源语言合并/切分上限（英文按字符） |
 | `resegment_target_max_chars` | `44` | 规则断句时的目标块上限；最终显示按 `subtitle_max_chars` 一行切条 |
+| `resegment_chunk_cues` | `90` | LLM 审校每次提交的 cue 数；长片自动按句末切块，避免输出 JSON 截断。小模型/短超时导致整块失败时可调小（如 60） |
 | `resegment_llm_check` | `true` | 规则断句后由 LLM 审校，生成 TTS 语义单元；显示字幕不被拉长 |
 | `resegment_llm_provider` | `auto` | `auto` = 本地审校，调用失败再走 DeepSeek；`local` / `deepseek` 强制其一；`off` 只做规则断句 |
 | `duration_tol_s` | `15` | 绝对时长容差下限；`video_autorate` 下 QC 还会按 `max_video_speedup_rate` / `max_video_pts_rate` 放宽上下界 |
@@ -172,6 +173,7 @@ python scripts/pipeline.py setup
 | `VTV_LOCAL_LLM_TIMEOUT` | 覆盖单候选探测超时（秒） |
 | `VTV_RESEGMENT_API` / `VTV_RESEGMENT_MODEL` / `VTV_RESEGMENT_KEY` | `pipeline.py` 逐个 provider 传给 `resegment_check.py`，不要手工设置 |
 | `VTV_RESEGMENT_TIMEOUT` | 断句审校请求超时（秒，默认 180） |
+| `VTV_RESEGMENT_CHUNK_CUES` | 断句审校分块大小；对应 `resegment_chunk_cues`（默认 90） |
 | `VTV_POLISH_API` / `VTV_POLISH_MODEL` / `VTV_POLISH_KEY` | `pipeline.py polish` 传给 `polish_srt.py`，不要手工设置 |
 | `PYVIDEOTRANS_HOME` | `pipeline.py` 为子进程设置，指向配置的 pyVideoTrans |
 | `INDEXTTS2_HOME` | `pipeline.py` 为子进程设置，指向配置的 IndexTTS2 |

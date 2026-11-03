@@ -89,6 +89,8 @@ python scripts/pipeline.py run --src "D:/videos" --out "D:/translated" \
   --source en --target zh-cn --backend index
 python scripts/pipeline.py report --out "D:/translated"   # 汇总 QC 到 <out>/QC_SUMMARY.md
 python scripts/batch_courses.py run --manifest courses.json   # 多课程：prep 并行、dub 串行
+python scripts/prep_check.py --manifest courses.json          # prep 后门禁：srt/术语/TTS 单元
+python scripts/batch_courses.py clean --manifest courses.json # 整批交付后删各课 _work
 ```
 
 运行时（`<vendor 根>`）、模型、checkpoints、`config.json` 和 API Key 都不随仓库分发；
