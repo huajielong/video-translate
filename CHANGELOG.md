@@ -27,6 +27,10 @@
   plus two independent clips (`before.mp4` original, `after.mp4` dubbed) in
   `docs/demo/`, presented in a GitHub Pages player page; `.gitignore`
   whitelists `docs/demo/`.
+- README now opens with a hero banner and uses two SVG diagrams
+  (`docs/assets/hero.svg`, `pipeline.svg`, `batch.svg`) for the six-stage
+  pipeline and the parallel-prep / serial-dub batch schedule, plus a real QC
+  excerpt table.
 
 ## 2026-11-02
 

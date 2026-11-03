@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="628" viewBox="0 0 1280 628" role="img" aria-label="video-translate 译制流水线：prep 阶段可并行，dub 与 post 阶段严格串行，所有阶段可缓存续跑">
+  <defs>
+    <radialGradient id="bg" cx="45%" cy="-25%" r="100%">
+      <stop offset="0%" stop-color="#161f2f"/>
+      <stop offset="60%" stop-color="#0c1017"/>
+      <stop offset="100%" stop-color="#090c11"/>
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity=".022"/>
+    </pattern>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L8 4L0 8z" fill="#44506a"/>
+    </marker>
+  </defs>
+
+  <rect width="1280" height="628" rx="18" fill="url(#bg)"/>
+  <rect width="1280" height="628" rx="18" fill="url(#grid)"/>
+
+  <g font-family="'Segoe UI','Microsoft YaHei','PingFang SC',system-ui,sans-serif">
+    <text x="52" y="46" font-size="20" font-weight="700" fill="#e8edf5">一次 run，走完六个阶段</text>
+    <text x="52" y="71" font-size="13" fill="#8b98a9">翻译与审校本地优先；每个阶段与每句配音都有缓存，失败后重跑同一命令即从断点继续。</text>
+
+    <text x="52" y="101" font-size="12.5" font-weight="600" fill="#7fb2ff">prep · 识别 / 翻译 / 审校 — 多课可并行</text>
+    <text x="52" y="341" font-size="12.5" font-weight="600" fill="#c8b18a">dub + post · 配音 / 合成 / 验收 — 严格串行，一次只跑一门</text>
+  </g>
+
+  <g font-family="'Segoe UI','Microsoft YaHei','PingFang SC',system-ui,sans-serif">
+
+    <!-- 01 ASR -->
+    <g>
+      <rect x="52" y="112" width="376" height="184" rx="14" fill="#121826" stroke="#202b3c"/>
+      <text x="74" y="150" font-family="'Cascadia Code',Consolas,monospace" font-size="11" letter-spacing="1.5" fill="#7fb2ff">01</text>
+      <text x="102" y="152" font-size="18.5" font-weight="700" fill="#e8edf5">字幕 / ASR</text>
+      <text x="74" y="178" font-size="12" fill="#7f8da1">Whisper large-v3-turbo</text>
+      <line x1="72" y1="192" x2="408" y2="192" stroke="#1f2a3b"/>
+      <g font-size="13" fill="#9aa7b8">
+        <text x="74" y="220">无字幕时自动识别，有 sidecar 字幕则跳过；</text>
+        <text x="74" y="244">保留说话人信息，供克隆音色参考。</text>
+      </g>
+      <text x="74" y="277" font-size="11" fill="#6f7d8f">输出</text>
+      <text x="110" y="277" font-family="'Cascadia Code',Consolas,monospace" font-size="12" fill="#cfe0ff">en.srt</text>
+    </g>
+
+    <!-- 02 翻译 -->
+    <g>
+      <rect x="452" y="112" width="376" height="184" rx="14" fill="#121826" stroke="#202b3c"/>
+      <text x="474" y="150" font-family="'Cascadia Code',Consolas,monospace" font-size="11" letter-spacing="1.5" fill="#7fb2ff">02</text>
+      <text x="502" y="152" font-size="18.5" font-weight="700" fill="#e8edf5">翻译 · 重断句</text>
+      <text x="474" y="178" font-size="12" fill="#7f8da1">本地 LLM 优先 · DeepSeek 兜底</text>
+      <line x1="472" y1="192" x2="808" y2="192" stroke="#1f2a3b"/>
+      <g font-size="13" fill="#9aa7b8">
+        <text x="474" y="220">合并碎句后按句子重切，术语表约束专名；</text>
+        <text x="474" y="244">长句按语义拆分，避免半句灌进 TTS。</text>
+      </g>
+      <text x="474" y="277" font-size="11" fill="#6f7d8f">输出</text>
+      <text x="510" y="277" font-family="'Cascadia Code',Consolas,monospace" font-size="12" fill="#cfe0ff">zh-cn.srt</text>
+    </g>
+
+    <!-- 03 审校 -->
+    <g>
+      <rect x="852" y="112" width="376" height="184" rx="14" fill="#121826" stroke="#202b3c"/>
+      <text x="874" y="150" font-family="'Cascadia Code',Consolas,monospace" font-size="11" letter-spacing="1.5" fill="#7fb2ff">03</text>
+      <text x="902" y="152" font-size="18.5" font-weight="700" fill="#e8edf5">断句审校</text>
+      <text x="874" y="178" font-size="12" fill="#7f8da1">长片按 ≤90 条字幕分块</text>
+      <line x1="872" y1="192" x2="1208" y2="192" stroke="#1f2a3b"/>
+      <g font-size="13" fill="#9aa7b8">
+        <text x="874" y="220">LLM 输出 TTS 语义单元，过度合并自动修复；</text>
+        <text x="874" y="244">显示字幕另按一行切条，两者块数可不同。</text>
+      </g>
+      <text x="874" y="277" font-size="11" fill="#6f7d8f">输出</text>
+      <text x="910" y="277" font-family="'Cascadia Code',Consolas,monospace" font-size="12" fill="#cfe0ff">tts.srt</text>
+    </g>
+
+    <!-- 04 克隆配音 -->
+    <g>
+      <rect x="52" y="352" width="376" height="184" rx="14" fill="#121826" stroke="#202b3c"/>
+      <text x="74" y="390" font-family="'Cascadia Code',Consolas,monospace" font-size="11" letter-spacing="1.5" fill="#f5b95a">04</text>
+      <text x="102" y="392" font-size="18.5" font-weight="700" fill="#e8edf5">克隆配音</text>
+      <text x="74" y="418" font-size="12" fill="#7f8da1">IndexTTS2 · 零样本克隆</text>
+      <line x1="72" y1="432" x2="408" y2="432" stroke="#1f2a3b"/>
+      <g font-size="13" fill="#9aa7b8">
+        <text x="74" y="460">逐句克隆原说话人音色；逐句缓存，重跑命中；</text>
+        <text x="74" y="484">TTS 保持绝对原速，不用拉伸音频凑时长。</text>
+      </g>
+      <text x="74" y="517" font-size="11" fill="#6f7d8f">输出</text>
+      <text x="110" y="517" font-family="'Cascadia Code',Consolas,monospace" font-size="12" fill="#ffe2b0">配音轨</text>
+    </g>
+
+    <!-- 05 对齐合成 -->
+    <g>
+      <rect x="452" y="352" width="376" height="184" rx="14" fill="#121826" stroke="#202b3c"/>
+      <text x="474" y="390" font-family="'Cascadia Code',Consolas,monospace" font-size="11" letter-spacing="1.5" fill="#4fd1a5">05</text>
+      <text x="502" y="392" font-size="18.5" font-weight="700" fill="#e8edf5">对齐 · 合成</text>
+      <text x="474" y="418" font-size="12" fill="#7f8da1">PTS 变速 · 硬字幕</text>
+      <line x1="472" y1="432" x2="808" y2="432" stroke="#1f2a3b"/>
+      <g font-size="13" fill="#9aa7b8">
+        <text x="474" y="460">音频短：视频片段最多加快 1.25× 追平；</text>
+        <text x="474" y="484">音频长：慢放片段吸收；句间保留 300ms。</text>
+      </g>
+      <text x="474" y="517" font-size="11" fill="#6f7d8f">输出</text>
+      <text x="510" y="517" font-family="'Cascadia Code',Consolas,monospace" font-size="12" fill="#b8f0d8">成片 MP4</text>
+    </g>
+
+    <!-- 06 QC -->
+    <g>
+      <rect x="852" y="352" width="376" height="184" rx="14" fill="#121826" stroke="#202b3c"/>
+      <text x="874" y="390" font-family="'Cascadia Code',Consolas,monospace" font-size="11" letter-spacing="1.5" fill="#4fd1a5">06</text>
+      <text x="902" y="392" font-size="18.5" font-weight="700" fill="#e8edf5">响度 · QC</text>
+      <text x="874" y="418" font-size="12" fill="#7f8da1">loudnorm · qc.py</text>
+      <line x1="872" y1="432" x2="1208" y2="432" stroke="#1f2a3b"/>
+      <g font-size="13" fill="#9aa7b8">
+        <text x="874" y="460">统一 -18 LUFS；逐条校验时长、字幕行宽、</text>
+        <text x="874" y="484">术语命中率与音画同步，写入 QC_SUMMARY。</text>
+      </g>
+      <text x="874" y="517" font-size="11" fill="#6f7d8f">输出</text>
+      <text x="910" y="517" font-family="'Cascadia Code',Consolas,monospace" font-size="12" fill="#b8f0d8">QC PASS</text>
+    </g>
+
+    <!-- 行内箭头 -->
+    <g stroke="#44506a" stroke-width="1.6">
+      <line x1="432" y1="204" x2="448" y2="204" marker-end="url(#arrow)"/>
+      <line x1="832" y1="204" x2="848" y2="204" marker-end="url(#arrow)"/>
+      <line x1="432" y1="444" x2="448" y2="444" marker-end="url(#arrow)"/>
+      <line x1="832" y1="444" x2="848" y2="444" marker-end="url(#arrow)"/>
+    </g>
+  </g>
+
+  <g font-family="'Segoe UI','Microsoft YaHei','PingFang SC',system-ui,sans-serif" font-size="12">
+    <text x="52" y="576" fill="#8b98a9">阶段缓存 + 逐句配音缓存：中断、换机器、换目录后，重跑同一命令都能接着跑。</text>
+    <text x="52" y="600" fill="#6f7d8f">QC 未通过不交付：时长、字幕行宽、术语命中、音画同步逐条校验，汇总到 QC_SUMMARY.md。</text>
+  </g>
+</svg>

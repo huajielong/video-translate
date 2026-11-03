@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="352" viewBox="0 0 1280 352" role="img" aria-label="video-translate：一条命令，把英文课程视频变成中文配音成片">
+  <defs>
+    <radialGradient id="bg" cx="42%" cy="-20%" r="95%">
+      <stop offset="0%" stop-color="#1d2940"/>
+      <stop offset="55%" stop-color="#0d1119"/>
+      <stop offset="100%" stop-color="#090c11"/>
+    </radialGradient>
+    <linearGradient id="title" x1="0%" y1="0%" x2="90%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#9fc4ff"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1280" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7fb2ff" stop-opacity="0"/>
+      <stop offset=".45" stop-color="#7fb2ff" stop-opacity=".55"/>
+      <stop offset=".62" stop-color="#4fd1a5" stop-opacity=".45"/>
+      <stop offset="1" stop-color="#4fd1a5" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity=".028"/>
+    </pattern>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="30"/>
+    </filter>
+    <filter id="card-shadow" x="-30%" y="-30%" width="160%" height="180%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000000" flood-opacity=".55"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="352" fill="url(#bg)"/>
+  <rect width="1280" height="352" fill="url(#grid)"/>
+  <ellipse cx="1020" cy="110" rx="280" ry="140" fill="#2f6bd8" opacity=".18" filter="url(#glow)"/>
+
+  <g font-family="'Segoe UI','Microsoft YaHei','PingFang SC',system-ui,sans-serif">
+    <text x="64" y="92" font-size="12" letter-spacing="3.2" fill="#6f7d8f">CLAUDE CODE SKILL · PYTHON 3.10+ · MIT</text>
+
+    <text x="61" y="165" font-size="62" font-weight="700" letter-spacing="-.5" fill="url(#title)">video-translate</text>
+
+    <text x="64" y="209" font-size="24" font-weight="600" fill="#e8edf5">一条命令，把英文课程视频变成中文配音成片</text>
+
+    <text x="64" y="241" font-size="15.5" fill="#9aa7b8">克隆原说话人音色 · 逐句语义重断句 · 音画自动对齐 · 失败可断点续跑</text>
+
+    <g font-size="13">
+      <rect x="64" y="272" width="124" height="30" rx="15" fill="#7fb2ff" fill-opacity=".1" stroke="#7fb2ff" stroke-opacity=".32"/>
+      <text x="126" y="291" text-anchor="middle" fill="#cfe0ff">IndexTTS2 克隆</text>
+
+      <rect x="198" y="272" width="98" height="30" rx="15" fill="#7fb2ff" fill-opacity=".1" stroke="#7fb2ff" stroke-opacity=".32"/>
+      <text x="247" y="291" text-anchor="middle" fill="#cfe0ff">语义重断句</text>
+
+      <rect x="306" y="272" width="112" height="30" rx="15" fill="#4fd1a5" fill-opacity=".09" stroke="#4fd1a5" stroke-opacity=".3"/>
+      <text x="362" y="291" text-anchor="middle" fill="#b8f0d8">音画自动对齐</text>
+
+      <rect x="428" y="272" width="94" height="30" rx="15" fill="#4fd1a5" fill-opacity=".09" stroke="#4fd1a5" stroke-opacity=".3"/>
+      <text x="475" y="291" text-anchor="middle" fill="#b8f0d8">断点续跑</text>
+    </g>
+  </g>
+
+  <g filter="url(#card-shadow)">
+    <rect x="806" y="46" width="410" height="260" rx="16" fill="#0f1520" stroke="#26344a"/>
+  </g>
+
+  <g font-family="'Cascadia Code','JetBrains Mono',Consolas,'Courier New',monospace">
+    <circle cx="832" cy="72" r="5" fill="#ff5f57" opacity=".75"/>
+    <circle cx="850" cy="72" r="5" fill="#febc2e" opacity=".75"/>
+    <circle cx="868" cy="72" r="5" fill="#28c840" opacity=".75"/>
+    <text x="890" y="77" font-size="12" fill="#8b98a9">translated / 交付目录</text>
+    <text x="1184" y="77" font-size="11.5" font-weight="700" text-anchor="end" fill="#4fd1a5">8 / 8 PASS</text>
+    <line x1="806" y1="90" x2="1216" y2="90" stroke="#1f2a3b"/>
+
+    <g font-size="12.5">
+      <rect x="834" y="111" width="7" height="7" rx="2" fill="#7fb2ff"/>
+      <text x="852" y="120" fill="#e8edf5">001_Introduction_中文.mp4</text>
+      <text x="1184" y="120" text-anchor="end" fill="#4fd1a5">✓</text>
+
+      <rect x="834" y="144" width="7" height="7" rx="2" fill="#4a5a72"/>
+      <text x="852" y="153" fill="#9aa7b8">_字幕/001_Introduction.zh-cn.srt</text>
+
+      <rect x="834" y="177" width="7" height="7" rx="2" fill="#4a5a72"/>
+      <text x="852" y="186" fill="#9aa7b8">_字幕/001_Introduction.en.srt</text>
+
+      <rect x="834" y="210" width="7" height="7" rx="2" fill="#4fd1a5"/>
+      <text x="852" y="219" fill="#e8edf5">QC_SUMMARY.md</text>
+      <text x="1184" y="219" text-anchor="end" font-size="11" font-weight="700" fill="#4fd1a5">PASS</text>
+
+      <rect x="834" y="243" width="7" height="7" rx="2" fill="#3a4658"/>
+      <text x="852" y="252" fill="#6f7d8f">_work/  交付后即可删除</text>
+    </g>
+  </g>
+
+  <rect y="350" width="1280" height="2" fill="url(#edge)"/>
+</svg>

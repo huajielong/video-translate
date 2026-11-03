@@ -1,16 +1,26 @@
 <div align="center">
 
-# video-translate
-
-**一条命令，把英文课程视频变成中文配音成片**
-
-克隆原说话人音色 · 逐句语义重断句 · 音画自动对齐 · 失败可断点续跑
+<img src="docs/assets/hero.svg" alt="video-translate：一条命令，把英文课程视频变成中文配音成片" width="100%">
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#环境要求)
 
 </div>
+
+<p align="center"><sub>已在 7 批、470+ 条真实课程视频上跑通，逐条 QC 验收后交付。</sub></p>
+
+<p align="center">
+  <a href="#效果演示">效果演示</a> ·
+  <a href="#为什么需要它">为什么</a> ·
+  <a href="#核心能力">核心能力</a> ·
+  <a href="#工作原理">工作原理</a> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#批量译制整门课程">批量</a> ·
+  <a href="#质量门禁">质量门禁</a> ·
+  <a href="#配置与密钥">配置</a> ·
+  <a href="#注意事项">注意事项</a>
+</p>
 
 ---
 
@@ -53,17 +63,9 @@ video-translate 把这些环节串成一条可重入的流水线：
 
 ## 工作原理
 
-```text
-输入视频（可带 sidecar 字幕）
-   │
-   ├─ ASR ───────────── 无字幕时用 Whisper large-v3-turbo 识别
-   ├─ 语义重断句 ────── 合并碎句、翻译、按句子重切
-   ├─ 断句审校 ──────── LLM 输出 <target>.tts.srt 作为 TTS 语义单元
-   ├─ 克隆配音 ──────── IndexTTS2 逐句克隆原说话人音色
-   ├─ 对齐 / 合成 ───── 视频 PTS 变速吸收长度差，句间 300ms 停顿
-   ├─ 响度归一化 ────── loudnorm 统一到 -18 LUFS
-   └─ QC ────────────── 时长 / 字幕 / 术语 / 同步 → QC_SUMMARY.md
-```
+![译制流水线：prep 可并行，dub 与 post 严格串行](docs/assets/pipeline.svg)
+
+一次 `run` 串起六个阶段。**prep（识别 / 翻译 / 审校）可以多课并行；配音与合成必须串行**（IndexTTS2 单 worker）。每个阶段和每句配音都有缓存，失败后重跑同一命令即可从断点继续。
 
 显示字幕与 TTS 单元是两套产物：**TTS 按完整句合成**（自然、少断点），**显示字幕按一行切条**（易读）。二者块数不同属正常现象。
 
@@ -122,6 +124,15 @@ python scripts/pipeline.py run \
 
 也可以拆成三段按需执行：`prep`（识别/翻译/审校）→ `dub`（配音）→ `post`（合成/响度）。
 
+运行中会看到（首次没有 `cached` 字样）：
+
+```text
+[prep] 001_Introduction: ASR cached
+[prep] 001_Introduction: translation cached
+[dub]  001_Introduction: TTS units 48 (display cues 53)
+[post] 001_Introduction: -> .../001_Introduction_中文.mp4 (qc_ok=True)
+```
+
 ### 5. 查看 QC
 
 ```bash
@@ -144,6 +155,8 @@ python scripts/pipeline.py report --out "D:/translated"
 `_work` 用完即可删：整批交付并 QC 通过后执行 `clean`（见下节）。删除后想改单条视频需要重新翻译该条；逐句配音缓存位于 `pyvideotrans/tmp/dubbing_cache`，不受影响。
 
 ## 批量译制整门课程
+
+![批量译制时序：prep 多课并行，dub + post 一次一门](docs/assets/batch.svg)
 
 `scripts/batch_courses.py` 用 manifest 驱动多门课程。`prep` 可多课并行，`dub + post` 严格串行（IndexTTS2 单 worker）。
 
@@ -179,7 +192,7 @@ python scripts/batch_courses.py clean  --manifest courses.json
 
 ## 质量门禁
 
-`prep` 完成、`dub` 开始之前，建议跑一次门禁（也可用于核验子代理的"已完成"声明）：
+交付前有两道机械关：**配音前的 `prep_check`** 和 **交付前的 QC 报告**。
 
 ```bash
 python scripts/prep_check.py --manifest courses.json
@@ -187,6 +200,17 @@ python scripts/prep_check.py --out "D:/videos/course/_中文译制"
 ```
 
 检查项：`<source>.srt` / `<target>.srt` / `<target>.tts.srt` 是否齐全、术语 recall 是否 ≥95%、TTS 单元是否超过 `resegment_target_max_chars`。任一失败退出码非零。
+
+`post` 完成后每条成品都会写入 QC 报告，例如某门课 8 条视频的实测节选：
+
+| 文件 | 时长(s) | 响度(LUFS) | 字幕块 | 最大行数 | 术语命中 | 结果 |
+|---|---:|---:|---:|---:|---:|---|
+| 002_Overview of Voice UI_中文.mp4 | 497.5 | -18.0 | 183 | 1 | 100% | PASS |
+| 003_Voice in Your App_中文.mp4 | 554.2 | -18.0 | 284 | 1 | 100% | PASS |
+| 005_Voice as a Tool_中文.mp4 | 544.6 | -18.0 | 327 | 1 | 100% | PASS |
+| 006_Voice AI Evals_中文.mp4 | 558.3 | -18.0 | 297 | 1 | 100% | PASS |
+
+同一门课 8 条视频全部 PASS（表中为节选）。
 
 门禁之外的运行时保障：
 
@@ -271,7 +295,7 @@ prep（本地 LLM 在线）→ 停本地服务 → run（MT 命中缓存，只�
 - IndexTTS2 单 worker，不能并行跑两条配音任务；`prep` 可以并行。
 - 双语字幕保持源 / 目标 1:1 配对，不做单语字幕的一行二次切分。
 - 本地 LLM 与 DeepSeek 都不可用时回退规则断句 + `fit_*`；显示字幕仍会按一行切条。
-- 开源仓库不附带课程视频、字幕、模型或 API Key。
+- 开源仓库除 `docs/demo/` 的示例片段外，不附带课程视频、字幕、模型或 API Key。
 
 ## 许可证
 
