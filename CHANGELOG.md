@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-11-03
+
+- Long-transcript resegment audit now chunks cue lists (`resegment_chunk_cues`,
+  default 90, sentence-boundary splits) with per-chunk caching. Fixes JSON
+  truncation on ~170-cue videos that previously fell back to rule segmentation.
+- Over-merged groups from small local models (4+ cues) are mechanically split
+  into <=3-block units (`repair_groups`) instead of rejecting the whole reply.
+  `pipeline.py` only marks the local provider failed on rc=3 (network), not
+  rc=4 (invalid groups), and retries the LLM audit when a cached translation
+  is missing its `.tts.srt`.
+- `resegment_check.py` retries transient connection resets (WinError 10054) and
+  502/503/504 once before falling back to another provider.
+- `batch_courses.py clean`: delete each course's `_work` after delivery, gated
+  on `batch_status.json` (`ok`, finals == expected, QC all passed); `--dry-run`
+  previews. `status` now shows dubbed progress.
+- `scripts/prep_check.py`: pre-dub gate for `<source>/<target>.srt` and
+  `<target>.tts.srt` presence, glossary recall (>=95%) and oversized TTS units;
+  supports `--out` or `--manifest` and returns non-zero on failure.
+- UTF-8, line-buffered stdout/stderr in entry scripts (fixes mojibake in
+  redirected `--help` output and delayed progress logs).
+- README refreshed: batch workflow, prep gate, chunked audit, cleanup, docs
+  index; `references/deployment.md` documents PowerShell process lookup for
+  Windows (Git Bash `pgrep`/`kill -0` cannot see Windows PIDs).
+
 ## 2026-11-02
 
 - Local-first LLM backends. `translate_channel=auto` (new default) probes

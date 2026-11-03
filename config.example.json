@@ -40,6 +40,7 @@
   "resegment_max_gap_ms": 900,
   "resegment_source_max_chars": 140,
   "resegment_target_max_chars": 44,
+  "resegment_chunk_cues": 90,
   "resegment_llm_check": true,
   "resegment_llm_provider": "auto",
   "subtitle_max_chars": 22,
