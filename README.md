@@ -18,9 +18,9 @@
 
 同一时刻的原始画面与译制画面并排对照：右侧为中文配音（克隆原说话人音色）并烧录一行式中文字幕。
 
-![翻译前后对比](assets/demo/before-after.gif)
+[![翻译前后对比](docs/demo/before-after.gif)](https://huajielong.github.io/video-translate/demo/)
 
-[观看带音频的对比片段](assets/demo/before-after.mp4)（16 秒：前 8 秒英文原声，后 8 秒中文配音）
+点击动图打开播放页：16 秒完整对比（前 8 秒英文原声，后 8 秒中文配音，含音频）。
 
 > 示例截取自课程《面向 AI Agent 与应用的语音技术》Introduction，仅用于展示译制效果。
 
