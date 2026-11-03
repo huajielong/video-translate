@@ -24,8 +24,8 @@
   index; `references/deployment.md` documents PowerShell process lookup for
   Windows (Git Bash `pgrep`/`kill -0` cannot see Windows PIDs).
 - README adds a before/after demo from a translated course: side-by-side GIF
-  plus a 16s audio comparison MP4 in `docs/demo/`, with a GitHub Pages player
-  (`docs/demo/index.html`) that starts playback from the preview; `.gitignore`
+  plus two independent clips (`before.mp4` original, `after.mp4` dubbed) in
+  `docs/demo/`, presented in a GitHub Pages player page; `.gitignore`
   whitelists `docs/demo/`.
 
 ## 2026-11-02

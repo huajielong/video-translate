@@ -13,75 +13,76 @@
     color: #e8edf5; font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
     padding: 36px 20px;
   }
-  main { width: min(960px, 100%); }
+  main { width: min(1040px, 100%); }
   h1 { font-size: 20px; font-weight: 600; margin: 0 0 6px; letter-spacing: .02em; }
   .lead { margin: 0 0 18px; color: #9aa7b8; font-size: 14px; line-height: 1.6; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  figure { margin: 0; }
   .frame {
     position: relative; border-radius: 12px; overflow: hidden; background: #000;
     border: 1px solid rgba(255,255,255,.08); box-shadow: 0 24px 60px rgba(0,0,0,.55);
   }
   video { display: block; width: 100%; height: auto; }
-  .overlay {
-    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    background: rgba(8,11,16,.32); cursor: pointer; transition: opacity .2s ease;
+  figcaption {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-top: 10px; color: #9aa7b8; font-size: 13px;
   }
-  .overlay.hidden { opacity: 0; pointer-events: none; }
-  .play {
-    width: 84px; height: 84px; border: 0; border-radius: 50%; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    background: rgba(255,255,255,.94); color: #0b0e14;
-    box-shadow: 0 10px 30px rgba(0,0,0,.42); transition: transform .15s ease;
+  .tag {
+    border-radius: 999px; padding: 2px 10px; font-size: 12px; color: #cfe0ff;
+    background: rgba(96,150,255,.16); border: 1px solid rgba(96,150,255,.35);
   }
-  .play:hover { transform: scale(1.05); }
-  .play svg { width: 30px; height: 30px; margin-left: 4px; }
+  .tag.accent { color: #b8f0d8; background: rgba(60,200,150,.14); border-color: rgba(60,200,150,.35); }
   .meta {
     display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center;
-    margin-top: 14px; color: #8b98a9; font-size: 13px;
+    margin-top: 16px; color: #8b98a9; font-size: 13px;
   }
   .meta a { color: #7fb2ff; text-decoration: none; }
   .meta a:hover { text-decoration: underline; }
-  .tag {
-    border: 1px solid rgba(255,255,255,.12); border-radius: 999px;
-    padding: 2px 10px; font-size: 12px; color: #a8b4c4;
+  .hint { margin-top: 12px; color: #6f7d8f; font-size: 12px; }
+  @media (max-width: 760px) {
+    .grid { grid-template-columns: 1fr; }
   }
 </style>
 </head>
 <body>
 <main>
   <h1>翻译前后对比</h1>
-  <p class="lead">前 8 秒英文原声，后 8 秒中文配音：IndexTTS2 克隆原说话人音色，一行式硬字幕，句间 300ms 停顿。</p>
+  <p class="lead">同一段课程画面，两段独立视频：左侧英文原声，右侧中文配音（IndexTTS2 克隆原说话人音色，一行式硬字幕）。分别播放，避免中英文声音重叠。</p>
 
-  <div class="frame">
-    <video id="demo" src="before-after.mp4" poster="poster.jpg" controls playsinline preload="auto"></video>
-    <div class="overlay" id="overlay" role="button" tabindex="0" aria-label="播放对比视频">
-      <span class="play" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-      </span>
-    </div>
+  <div class="grid">
+    <figure>
+      <div class="frame">
+        <video id="v-before" src="before.mp4" poster="before-poster.jpg" controls playsinline preload="metadata"></video>
+      </div>
+      <figcaption><span class="tag">原声</span> English original</figcaption>
+    </figure>
+    <figure>
+      <div class="frame">
+        <video id="v-after" src="after.mp4" poster="after-poster.jpg" controls playsinline preload="metadata"></video>
+      </div>
+      <figcaption><span class="tag accent">中文配音</span> 克隆原音色 · 硬字幕</figcaption>
+    </figure>
   </div>
+
+  <div class="hint">开始播放一侧时，另一侧会自动暂停。</div>
 
   <div class="meta">
     <a href="https://github.com/huajielong/video-translate">GitHub 仓库</a>
     <a href="https://github.com/huajielong/video-translate#readme">README</a>
     <a href="before-after.gif">并排对比动图</a>
-    <span class="tag">课程《面向 AI Agent 与应用的语音技术》Introduction</span>
+    <span>课程《面向 AI Agent 与应用的语音技术》Introduction</span>
   </div>
 </main>
 <script>
-  const video = document.getElementById('demo');
-  const overlay = document.getElementById('overlay');
+  const videos = [document.getElementById('v-before'), document.getElementById('v-after')];
 
-  function start() {
-    overlay.classList.add('hidden');
-    video.play().catch(() => overlay.classList.remove('hidden'));
-  }
-
-  overlay.addEventListener('click', start);
-  overlay.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); start(); }
+  videos.forEach((video) => {
+    video.addEventListener('play', () => {
+      videos.forEach((other) => {
+        if (other !== video && !other.paused) other.pause();
+      });
+    });
   });
-  video.addEventListener('play', () => overlay.classList.add('hidden'));
-  video.play().then(() => overlay.classList.add('hidden')).catch(() => {});
 </script>
 </body>
 </html>
