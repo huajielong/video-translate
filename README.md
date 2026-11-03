@@ -156,8 +156,6 @@ python scripts/pipeline.py report --out "D:/translated"
 
 ## 批量译制整门课程
 
-![批量译制时序：prep 多课并行，dub + post 一次一门](docs/assets/batch.svg)
-
 `scripts/batch_courses.py` 用 manifest 驱动多门课程。`prep` 可多课并行，`dub + post` 严格串行（IndexTTS2 单 worker）。
 
 ```jsonc
